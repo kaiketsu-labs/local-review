@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="560" viewBox="0 0 1440 560" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="560" gradientUnits="userSpaceOnUse"><stop stop-color="#151B24"/><stop offset="1" stop-color="#20242B"/></linearGradient>
+    <linearGradient id="glow" x1="850" y1="0" x2="1300" y2="560" gradientUnits="userSpaceOnUse"><stop stop-color="#61B8B4" stop-opacity=".13"/><stop offset="1" stop-color="#61B8B4" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect width="1440" height="560" rx="24" fill="url(#bg)"/>
+  <rect width="1440" height="560" rx="24" fill="url(#glow)"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif">
+    <g transform="translate(66 65)">
+      <rect width="52" height="52" rx="14" fill="#264647"/>
+      <path d="M14 13h24v20H23l-9 7V13Z" stroke="#8AD0CB" stroke-width="2" stroke-linejoin="round"/>
+      <path d="m23 19-4 4 4 4m6-8 4 4-4 4" stroke="#8AD0CB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <text x="134" y="99" fill="#F2F3F4" font-size="30" font-weight="650">Local Review</text>
+    <text x="66" y="216" fill="#F2F3F4" font-size="54" font-weight="650" letter-spacing="-1.8">Review the code.</text>
+    <text x="66" y="279" fill="#A2D6D1" font-size="54" font-weight="650" letter-spacing="-1.8">Keep the conversation.</text>
+    <text x="68" y="340" fill="#ADB7C3" font-size="21">Inline feedback. Your Claude session.</text>
+    <text x="68" y="371" fill="#ADB7C3" font-size="21">One place to ask, improve and approve.</text>
+    <g transform="translate(68 431)" font-size="14" font-weight="550">
+      <rect width="92" height="32" rx="16" fill="#2C343E"/><text x="23" y="21" fill="#C7D2DF">VS Code</text>
+      <rect x="102" width="120" height="32" rx="16" fill="#39302D"/><text x="120" y="21" fill="#E8B197">Claude Code</text>
+      <rect x="232" width="111" height="32" rx="16" fill="#253D3E"/><text x="250" y="21" fill="#9BD0CB">Local first</text>
+    </g>
+    <g transform="translate(688 67)">
+      <rect width="686" height="426" rx="13" fill="#1D222B" stroke="#4C5664"/>
+      <path d="M0 38h686" stroke="#38414E"/>
+      <circle cx="21" cy="19" r="4" fill="#B28278"/><circle cx="37" cy="19" r="4" fill="#B3A27F"/><circle cx="53" cy="19" r="4" fill="#7EAB99"/>
+      <text x="80" y="24" fill="#B6C0CC" font-size="12">retry.py</text>
+      <text x="560" y="24" fill="#7F8C9B" font-size="12">Local Review</text>
+      <g font-family="SFMono-Regular,Consolas,Liberation Mono,monospace" font-size="15">
+        <text x="22" y="78" fill="#6C7989">12</text>
+        <text x="62" y="78" fill="#C792D4">async def <tspan fill="#DCDCAA">with_retry</tspan><tspan fill="#D5DAE1">(operation):</tspan></text>
+        <text x="22" y="108" fill="#6C7989">13</text>
+        <text x="62" y="108" fill="#C792D4">    for <tspan fill="#D5DAE1">attempt </tspan>in <tspan fill="#DCDCAA">range</tspan><tspan fill="#D5DAE1">(</tspan><tspan fill="#B5CEA8">3</tspan><tspan fill="#D5DAE1">):</tspan></text>
+        <rect x="48" y="119" width="614" height="32" rx="3" fill="#2E474A"/><rect x="48" y="119" width="3" height="32" fill="#86C4C0"/>
+        <text x="22" y="141" fill="#6C7989">14</text>
+        <text x="62" y="141" fill="#C792D4">        return await <tspan fill="#DCDCAA">operation</tspan><tspan fill="#D5DAE1">()</tspan></text>
+      </g>
+      <g transform="translate(48 171)">
+        <rect width="614" height="192" rx="8" fill="#282F39" stroke="#52616E"/>
+        <rect width="3" height="192" rx="1.5" fill="#82BDB8"/>
+        <circle cx="27" cy="30" r="12" fill="#345255"/><text x="21" y="35" fill="#BCE5DF" font-size="13">U</text>
+        <text x="50" y="34" fill="#F2F3F4" font-size="14" font-weight="600">You</text>
+        <text x="96" y="34" fill="#9DAAB8" font-size="12">just now</text>
+        <rect x="50" y="48" width="31" height="23" rx="4" fill="#3A4B4F"/><text x="57" y="64" fill="#B4E0DA" font-size="13" font-family="Consolas,monospace">/i</text>
+        <text x="91" y="64" fill="#E0E5EC" font-size="15">Add a timeout for each attempt.</text>
+        <path d="M18 91h578" stroke="#3C4855"/>
+        <circle cx="27" cy="119" r="12" fill="#524139"/><path d="m27 111 2 6 6 2-6 2-2 6-2-6-6-2 6-2Z" fill="#E3B89A"/>
+        <text x="50" y="123" fill="#F2F3F4" font-size="14" font-weight="600">Claude</text>
+        <text x="50" y="148" fill="#D0D8E2" font-size="15">Timeout added. Ready for your review.</text>
+        <rect x="464" y="157" width="130" height="24" rx="12" fill="#284541"/><text x="479" y="173" fill="#B2D9CA" font-size="12">✓ Resolve thread</text>
+      </g>
+      <text x="49" y="400" fill="#91A1B2" font-size="12">Discuss at the line. Review the change. You decide when it is done.</text>
+    </g>
+    <text x="1373" y="530" text-anchor="end" fill="#7F8C9B" font-size="11">Illustration · sample conversation</text>
+  </g>
+</svg>
