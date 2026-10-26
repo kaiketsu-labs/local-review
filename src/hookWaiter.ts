@@ -6,6 +6,7 @@ import { BridgeClient, BridgeProtocolError, readBatch, readDescriptor, record } 
 import type { ReviewBatch } from './connection.js';
 import { buildReviewBatchPrompt } from './eventPrompt.js';
 import { createHookDeliveryLedger } from './hookDelivery.js';
+import { ownsSession } from './sessionBinding.js';
 
 /** Read the bounded JSON envelope supplied to a Claude command hook. */
 async function readHookInput(): Promise<Record<string, unknown>> {
@@ -87,6 +88,8 @@ async function main(): Promise<void> {
     throw new Error('Claude did not supply a session identifier.');
   }
   const descriptor = await readDescriptor(connectionPath);
+  const bindingPath = process.env['LOCAL_REVIEW_SESSION_BINDING'];
+  if (bindingPath !== undefined && !await ownsSession(bindingPath, descriptor.workspaceRoot, sessionId)) return;
   const hash = createHash('sha256').update(descriptor.workspaceRoot).digest('hex').slice(0, 20);
   const lockPath = join(dirname(connectionPath), `watcher-${hash}.lock`);
   const owner = await acquireLock(lockPath, sessionId);
@@ -95,7 +98,7 @@ async function main(): Promise<void> {
   const stop = (): void => abort.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
-  const bridge = new BridgeClient(descriptor, connectionPath, abort.signal, 'watcher');
+  const bridge = new BridgeClient(descriptor, connectionPath, abort.signal, 'watcher', sessionId);
   let retryMs = 500;
   let recover = envelope.hook_event_name === 'SessionStart';
   try {
@@ -103,6 +106,7 @@ async function main(): Promise<void> {
     let snapshot = true;
     let sequence = 0;
     while (!abort.signal.aborted) {
+      if (bindingPath !== undefined && !await ownsSession(bindingPath, descriptor.workspaceRoot, sessionId)) return;
       let batch: ReviewBatch;
       try {
         batch = readBatch(await bridge.request(snapshot ? '/pending' : `/events?after=${sequence}`), descriptor.workspaceRoot);
@@ -117,6 +121,7 @@ async function main(): Promise<void> {
         continue;
       }
       if (abort.signal.aborted) break;
+      if (bindingPath !== undefined && !await ownsSession(bindingPath, descriptor.workspaceRoot, sessionId)) return;
       if (!snapshot) {
         snapshot = true;
         continue;

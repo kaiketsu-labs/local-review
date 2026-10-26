@@ -2,15 +2,15 @@
   "name": "local-review",
   "displayName": "Local Review",
   "description": "Review local changes with Claude Code using native inline comments and automatic feedback delivery.",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "icon": "resources/icon.png",
   "galleryBanner": { "color": "#101B29", "theme": "dark" },
   "publisher": "local-review-dev",
   "private": true,
   "license": "UNLICENSED",
-  "repository": { "type": "git", "url": "https://github.com/flucas96/local-review.git" },
-  "homepage": "https://github.com/flucas96/local-review#readme",
-  "bugs": { "url": "https://github.com/flucas96/local-review/issues" },
+  "repository": { "type": "git", "url": "https://github.com/kaiketsu-labs/local-review.git" },
+  "homepage": "https://github.com/kaiketsu-labs/local-review#readme",
+  "bugs": { "url": "https://github.com/kaiketsu-labs/local-review/issues" },
   "engines": { "vscode": "^1.100.0", "node": ">=22" },
   "categories": ["Other"],
   "main": "./dist/extension.cjs",
@@ -52,6 +52,7 @@
     "commands": [
       { "command": "localReview.startClaude", "title": "Mit Claude verbinden", "category": "Local Review", "icon": "$(plug)" },
       { "command": "localReview.copyClaudeCommand", "title": "Verbindungsbefehl kopieren", "category": "Local Review", "icon": "$(terminal)" },
+      { "command": "localReview.connectRunningClaude", "title": "Laufende Unterhaltung verbinden", "category": "Local Review", "icon": "$(plug)" },
       { "command": "localReview.addComment", "title": "Kommentar hinzufügen", "category": "Local Review", "icon": "$(comment-add)" },
       { "command": "localReview.openComposer", "title": "Feedback in Seitenansicht schreiben", "category": "Local Review", "icon": "$(open-preview)" },
       { "command": "localReview.openCode", "title": "Code im Editor öffnen", "category": "Local Review", "icon": "$(go-to-file)" },
@@ -124,8 +125,8 @@
     "configuration": {
       "title": "Local Review",
       "properties": {
-        "localReview.claudePath": { "type": "string", "default": "claude", "scope": "machine", "description": "Pfad zur Claude-Code-Anwendung." },
-        "localReview.nodePath": { "type": "string", "default": "node", "scope": "machine", "description": "Pfad zu Node.js 22 oder neuer für die lokale Verbindung." },
+        "localReview.claudePath": { "type": "string", "default": "claude", "scope": "machine-overridable", "description": "Pfad zur Claude-Code-Anwendung. In vertrauenswürdigen Projekten überschreibbar." },
+        "localReview.nodePath": { "type": "string", "default": "node", "scope": "machine-overridable", "description": "Pfad zu Node.js 22 oder neuer. In vertrauenswürdigen Projekten überschreibbar." },
         "localReview.transport": { "type": "string", "enum": ["hooks", "channels"], "default": "hooks", "description": "Automatische Zustellung im Hintergrund (Standard: hooks). channels ist eine experimentelle Alternative mit zusätzlichen Voraussetzungen." }
       }
     }

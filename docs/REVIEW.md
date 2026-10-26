@@ -4,6 +4,8 @@ Reviewed on 20–21 October 2026. **Fixed** means a source change has been made.
 
 Latest evidence: [0.4.7 UX review](UX-REVIEW-2026-10-21.md), including **210 passing automated tests**, an actual VS Code click-through with controlled agent replies, and responsive PR-preview checks. Earlier authenticated Claude and hook evidence remains in the [end-to-end report](QA-2026-10-21.md). These evidence types are recorded separately.
 
+Update 26 October: [0.4.12 running-conversation QA](QA-2026-10-26.md) records 256 passing tests and authenticated in-place connection with unchanged process/session identity, an acknowledged native inline question and a formatted reply. The organization repository now has a redesigned README and copied release history.
+
 ## Findings
 
 | ID | Priority | Finding | Source status | Verification |
@@ -31,9 +33,9 @@ Three independent read-only audits of preview `0.1.1` (`1765984`) identified the
 | LR-012 | P1 | Claude cannot directly open the original review thread. | An authenticated `open_review(event_id)` MCP tool reusing existing diff/thread navigation. |
 | LR-013 | P1 | Replies update the UI but have no unread state or next-answer action. | Unread/ready count, optional actionable notification, and keyboard navigation without automatic focus changes. |
 | LR-014 | P1 | MCP heartbeat can show connected independently of a working wake hook. | Fixed in 0.4.7: separate receiver readiness, expire it independently, and offer reconnect while preserving explicit ACK semantics. Process tests pass; native connected/receiver states observed. |
-| LR-015 | P2 | Separate terminal support and already-running process attachment. | 0.4.8 adds a quoted external launch/resume command. Existing processes must exit first; in-place attachment remains unverified. |
-| LR-016 | P2 | Session ownership and conversation selection. | 0.4.8 uses Claude's specific-conversation picker instead of `--continue`, with explicit managed replacement and an external-receiver guard. Native authenticated new/resume, retained context and inline reply are verified. Exact session ownership, owner display and competing-session takeover remain open. |
-| LR-017 | P2 | Required Claude wake capability is not checked during setup. | Capability/version preflight with an actionable compatibility error. |
+| LR-015 | P2 | Separate terminal support and already-running process attachment. | 0.4.12 adds an explicit in-conversation connection through a local plugin. Native authenticated in-place attachment and reply passed; separate-terminal UI remains unverified. |
+| LR-016 | P2 | Session ownership and conversation selection. | 0.4.12 adds a searchable project conversation list, live indicators and selected-session guards for plugin hooks, tools and the bridge. Competing MCP/hook processes pass isolation tests; two authenticated sessions and owner display remain follow-up checks. |
+| LR-017 | P2 | Required Claude wake capability is not checked during setup. | Live setup now requires Claude 2.1.280+ with an actionable version/path error. Legacy launch capabilities still rely on installed Claude support. |
 | LR-018 | P2 | Review file selection is HEAD-relative and opens one file at a time. | A stable review baseline and next/previous-file navigation; committed work must remain reviewable. |
 | LR-019 | P2 | The flat queue hides filename/line in a tooltip and includes all resolved threads. | Fixed: visible filename:line in 0.4.7, saved resolved filter and quick actions in 0.4.4. Native hide/show/reopen repeated in 0.4.7. Unread tracking remains LR-013. |
 | LR-020 | P2 | A slash prefix can override the clicked intent button without a preview. | Source fixed in 0.2.0: controlled composer previews live mode and uses one send action; native walkthrough pending. |

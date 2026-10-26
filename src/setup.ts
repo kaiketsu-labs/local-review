@@ -1,34 +1,20 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import * as vscode from 'vscode';
 import type { ReviewBridge } from './contracts.js';
-import { record } from './connection.js';
 import { requireNodeRuntime, resolveExecutable } from './executables.js';
+import { readPrivateJson, writePrivateJson } from './privateFiles.js';
+import { quotePosix } from './shell.js';
+import { installLivePlugin, showLiveConnection } from './liveSetup.js';
+import { listClaudeConversations } from './claudeSessions.js';
+import { readSessionBinding } from './sessionBinding.js';
+export { quotePosix } from './shell.js';
 
 const reviewTerminalName = 'Claude · Local Review';
-
-/** Quote a single argument for the POSIX shell used by Claude command hooks. */
-export function quotePosix(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
 
 /** Quote terminal arguments without interpreting user-configured executable paths. */
 function terminalCommand(executable: string, args: readonly string[]): string {
   return [executable, ...args].map(quotePosix).join(' ');
-}
-
-/** Write a private runtime file outside the reviewed source repository. */
-async function writePrivateJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-    await rename(temporary, path);
-  } finally {
-    await unlink(temporary).catch((error: unknown) => {
-      if (record(error)?.code !== 'ENOENT') throw error;
-    });
-  }
 }
 
 /** Reuse this project's managed terminal when VS Code reloads the extension host. */
@@ -59,6 +45,8 @@ export async function prepareConnection(
   const channelPath = join(context.extensionPath, 'dist', 'channel.cjs');
   const waiterPath = join(context.extensionPath, 'dist', 'hook-waiter.cjs');
   await writePrivateJson(connectionPath, bridge.descriptor);
+  const liveConnection = join(storagePath, 'live', 'connection.json');
+  if (await readPrivateJson(liveConnection) !== undefined) await writePrivateJson(liveConnection, bridge.descriptor);
   await writePrivateJson(mcpPath, {
     mcpServers: {
       'local-review': {
@@ -76,20 +64,36 @@ export async function prepareConnection(
 }
 
 /** Select a conversation without guessing which recent session created the code. */
-async function selectConversation(): Promise<boolean | undefined> {
-  const selection = await vscode.window.showQuickPick([
+async function selectConversation(workspaceRoot: string, includeRunning = true): Promise<boolean | string | undefined> {
+  const choices = [
     {
-      label: 'Unterhaltung auswählen', description: 'Bestehenden Kontext behalten', resume: true,
-      detail: 'Sitzung läuft noch? Erst /exit, dann hier auswählen.',
+      label: 'Unterhaltung auswählen', description: 'Frühere Unterhaltung fortsetzen', resume: true as boolean | 'running',
+      detail: 'Nach Name oder Branch suchen; laufende Unterhaltungen werden erkannt.',
     },
     { label: 'Neue Unterhaltung', description: 'Mit leerem Gespräch beginnen', resume: false },
-  ], { title: 'Claude Code verbinden', placeHolder: 'Welche Unterhaltung soll deine Kommentare erhalten?' });
-  return selection?.resume;
+  ];
+  if (includeRunning) choices.push({ label: 'Laufende Unterhaltung verbinden', description: 'Im bestehenden Claude bleiben',
+    detail: '/local-review:connect verbindet genau die Unterhaltung, in der du den Befehl ausführst.', resume: 'running' });
+  const selection = await vscode.window.showQuickPick(choices, {
+    title: 'Claude Code verbinden', placeHolder: 'Laufend verbinden, frühere Unterhaltung fortsetzen oder neu starten', matchOnDescription: true,
+  });
+  if (selection?.resume !== true) return selection?.resume;
+  const sessions = await listClaudeConversations(workspaceRoot).catch(() => []);
+  if (sessions.length === 0) return true;
+  const rows = sessions.map(session => ({ label: session.title,
+    description: `${session.running ? 'Läuft · ' : ''}${new Date(session.modifiedAt).toLocaleString()}${session.branch ? ` · ${session.branch}` : ''}`,
+    detail: session.running ? 'Im ursprünglichen Prozess verbinden.' : `Kontext behalten · ${session.id.slice(0, 8)}`,
+    value: session.running ? 'running' : session.id,
+  }));
+  const chosen = await vscode.window.showQuickPick([...rows, { label: 'Weitere Unterhaltungen …', description: 'Claude-Auswahl öffnen', detail: '', value: 'picker' }], {
+    title: 'Unterhaltung auswählen', placeHolder: 'Nach Name oder Branch suchen', matchOnDescription: true,
+  });
+  return chosen?.value === 'picker' ? true : chosen?.value;
 }
 
 /** Prepare the same private review connection for either terminal location. */
 async function prepareClaudeCommand(
-  context: vscode.ExtensionContext, bridge: ReviewBridge, storagePath: string, resume: boolean,
+  context: vscode.ExtensionContext, bridge: ReviewBridge, storagePath: string, resume: boolean | string,
 ): Promise<string> {
   const configuration = vscode.workspace.getConfiguration('localReview');
   const [executable, nodePath] = await Promise.all([
@@ -102,7 +106,14 @@ async function prepareClaudeCommand(
   if (prepared.transport === 'hooks') args.push('--settings', prepared.hooksPath);
   else args.push('--dangerously-load-development-channels', 'server:local-review');
   if (resume) args.push('--resume');
-  return terminalCommand(executable, args);
+  if (typeof resume === 'string') args.push(resume);
+  const launch = terminalCommand(executable, args);
+  const bindingPath = join(storagePath, 'selected-session.json');
+  const binding = await readSessionBinding(bindingPath, bridge.descriptor.workspaceRoot);
+  if (binding === undefined) return launch;
+  const release = terminalCommand(nodePath, [join(context.extensionPath, 'dist', 'live-connect.cjs'), '--release',
+    join(storagePath, 'connection.json'), bindingPath, binding.sessionId]);
+  return `${release} && ${launch}`;
 }
 
 /** Connect a chosen or new conversation, or copy its command for a separate terminal. */
@@ -143,6 +154,27 @@ export function registerClaudeLauncher(
       launching = false;
     }
   });
+  const connectRunning = async (): Promise<void> => {
+    if (receiverConflict(undefined)) return;
+    const configuration = vscode.workspace.getConfiguration('localReview');
+    const [executable, nodePath] = await Promise.all([
+      resolveExecutable(configuration.get<string>('claudePath', 'claude'), bridge.descriptor.workspaceRoot),
+      resolveExecutable(configuration.get<string>('nodePath', 'node'), bridge.descriptor.workspaceRoot),
+    ]);
+    await requireNodeRuntime(nodePath);
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Laufendes Claude verbinden' }, async () => {
+      await installLivePlugin(context, bridge, storagePath, executable, nodePath);
+    });
+    if (receiverConflict(undefined)) {
+      await unlink(join(storagePath, 'live', 'connect-ticket.json')).catch(() => undefined);
+      return;
+    }
+    await unlink(join(storagePath, 'selected-session.json')).catch((error: unknown) => {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    });
+    context.subscriptions.push(showLiveConnection(bridge));
+  };
+  const running = register('localReview.connectRunningClaude', connectRunning);
   const command = register('localReview.startClaude', async () => {
     let replaceTerminal: vscode.Terminal | undefined;
     if (!isLive(terminal)) terminal = existingReviewTerminal(bridge.descriptor.workspaceRoot, inactiveTerminals);
@@ -165,10 +197,17 @@ export function registerClaudeLauncher(
       }
       replaceTerminal = currentTerminal;
     }
-    const resume = await selectConversation();
+    const resume = await selectConversation(bridge.descriptor.workspaceRoot);
     if (resume === undefined || receiverConflict(replaceTerminal)) return;
+    if (resume === 'running') {
+      await connectRunning();
+      return;
+    }
     const launch = await prepareClaudeCommand(context, bridge, storagePath, resume);
     if (receiverConflict(replaceTerminal)) return;
+    await unlink(join(storagePath, 'selected-session.json')).catch((error: unknown) => {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    });
     if (isLive(replaceTerminal)) {
       inactiveTerminals.add(replaceTerminal);
       replaceTerminal.dispose();
@@ -178,11 +217,15 @@ export function registerClaudeLauncher(
     terminal.sendText(launch);
   });
   const copy = register('localReview.copyClaudeCommand', async () => {
-    const resume = await selectConversation();
+    const resume = await selectConversation(bridge.descriptor.workspaceRoot, false);
     if (resume === undefined) return;
+    if (resume === 'running') {
+      await connectRunning();
+      return;
+    }
     const launch = await prepareClaudeCommand(context, bridge, storagePath, resume);
     await vscode.env.clipboard.writeText(`cd ${quotePosix(bridge.descriptor.workspaceRoot)} && ${launch}`);
     void vscode.window.showInformationMessage('Befehl kopiert. Im Shell-Prompt ausführen; laufendes Claude vorher mit /exit beenden.');
   });
-  return vscode.Disposable.from(command, copy, closed, ended);
+  return vscode.Disposable.from(command, copy, running, closed, ended);
 }

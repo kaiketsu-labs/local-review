@@ -25,7 +25,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await createReviewController(store, context);
     context.subscriptions.push(registerReviewAppearance(context));
     context.subscriptions.push(registerPrExport(context, store));
-    const bridge = await createReviewBridge(store);
+    const bridge = await createReviewBridge(store, join(storage.fsPath, 'selected-session.json'));
     activeBridge = bridge;
     context.subscriptions.push(bridge, registerClaudeLauncher(context, bridge, storage.fsPath));
     await prepareConnection(context, bridge, storage.fsPath);

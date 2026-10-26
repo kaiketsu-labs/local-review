@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test, { afterEach } from 'node:test';
 import type { TestContext } from 'node:test';
 import { promisify } from 'node:util';
 
 import type { ReviewBridge } from '../src/contracts.js';
 import { prepareConnection, registerClaudeLauncher } from '../src/setup.js';
+import { writePrivateJson } from '../src/privateFiles.js';
+import { readSessionBinding } from '../src/sessionBinding.js';
 import { commands, env, FakeTerminal, resetFakeEditor, resetFakeWindow, terminalEvents, window, workspace } from './fakes/vscode.js';
 
 const registrations: vscode.Disposable[] = [];
@@ -76,7 +78,7 @@ test('does not adopt another project\'s terminal or dispose it when connection s
 
   assert.equal(terminal.showCalls, 0);
   assert.equal(terminal.disposed, false);
-  assert.deepEqual(window.quickPicks[0]?.map((item) => item.label), ['Unterhaltung auswählen', 'Neue Unterhaltung']);
+  assert.deepEqual(window.quickPicks[0]?.map((item) => item.label), ['Unterhaltung auswählen', 'Neue Unterhaltung', 'Laufende Unterhaltung verbinden']);
   assert.deepEqual(await readdir(root), []);
 });
 
@@ -120,7 +122,7 @@ test('an ended managed session cannot authorize takeover or be rediscovered as t
   window.quickPickIndex = undefined;
   await commands.executeCommand('localReview.startClaude');
 
-  assert.deepEqual(window.quickPicks[0]?.map((item) => item.label), ['Unterhaltung auswählen', 'Neue Unterhaltung']);
+  assert.deepEqual(window.quickPicks[0]?.map((item) => item.label), ['Unterhaltung auswählen', 'Neue Unterhaltung', 'Laufende Unterhaltung verbinden']);
   assert.equal(terminal.disposed, false);
   assert.deepEqual(await readdir(root), []);
 });
@@ -351,6 +353,27 @@ test('cancelling an external command preserves the clipboard, terminal, and runt
   assert.deepEqual(await readdir(root), []);
 });
 
+test('copying a new-session command preserves the live selection until the command is executed', async t => {
+  const { root } = await fixture(t);
+  const sessionId = '11111111-1111-4111-8111-111111111111';
+  const bindingPath = join(root, 'selected-session.json');
+  await writePrivateJson(bindingPath, { version: 1, workspaceRoot: root, sessionId });
+  const executable = join(root, 'claude-fixture');
+  await writeFile(executable, `#!${process.execPath}\nconsole.log('new-session-started');\n`, { mode: 0o700 });
+  const context = { extensionPath: resolve('.') } as vscode.ExtensionContext;
+  workspace.configurationValues.set('localReview.claudePath', executable);
+  workspace.configurationValues.set('localReview.nodePath', process.execPath);
+  window.quickPickIndex = 1;
+  registrations.push(registerClaudeLauncher(context, bridge(root, false), root));
+  await commands.executeCommand('localReview.copyClaudeCommand');
+  assert.deepEqual(window.errors, []);
+  assert.equal((await readSessionBinding(bindingPath, root))?.sessionId, sessionId);
+  const command = env.clipboard.writes[0]; assert.ok(command);
+  const result = await promisify(execFile)('/bin/sh', ['-c', command], { cwd: root, encoding: 'utf8', timeout: 5_000 });
+  assert.equal(result.stdout.trim(), 'new-session-started');
+  assert.equal(await readSessionBinding(bindingPath, root), undefined);
+});
+
 test('failed external command setup leaves the clipboard and active conversation untouched', async (t) => {
   const { root, context } = await fixture(t);
   const terminal = new FakeTerminal({ name: 'Claude · Local Review', cwd: root });
@@ -426,4 +449,16 @@ test('rewriting private integration files replaces permissive old files and pres
   assert.deepEqual(JSON.parse(await readFile(connectionPath, 'utf8')), source.descriptor);
   for (const path of files) assert.equal((await stat(path)).mode & 0o777, 0o600);
   assert.deepEqual((await readdir(root)).sort(), ['connection.json', 'hooks.json', 'mcp.json']);
+});
+
+test('preparing a refreshed bridge also updates the descriptor used by an installed live plugin', async t => {
+  const { root, context } = await fixture(t);
+  const live = join(root, 'live', 'connection.json');
+  await mkdir(join(root, 'live'));
+  await writePrivateJson(live, bridge(root).descriptor);
+  const source = bridge(root);
+  const updated = { ...source, descriptor: { ...source.descriptor, token: 'replacement-private-token' } };
+  await prepareConnection(context, updated, root, process.execPath);
+  assert.deepEqual(JSON.parse(await readFile(live, 'utf8')), updated.descriptor);
+  assert.equal((await stat(live)).mode & 0o777, 0o600);
 });

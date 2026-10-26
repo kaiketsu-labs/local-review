@@ -21,6 +21,7 @@ import {
   maximumReviewTextLength,
 } from './limits.js';
 import { parseAgentUpdate, ReviewStoreError } from './store.js';
+import { readSessionBinding } from './sessionBinding.js';
 
 const maximumBodyBytes = 256 * 1024;
 const pollDurationMs = 20_000;
@@ -28,14 +29,15 @@ const connectionTimeoutMs = 45_000;
 
 interface PendingPoll {
   readonly after: number;
+  readonly sessionId: string | undefined;
   readonly response: ServerResponse;
   readonly timer: ReturnType<typeof setTimeout>;
   readonly onClose: () => void;
 }
 
 /** Start an authenticated, workspace-scoped review bridge on a random loopback port. */
-export async function createReviewBridge(store: ReviewStore): Promise<ReviewBridge> {
-  const bridge = new LocalReviewBridge(store);
+export async function createReviewBridge(store: ReviewStore, sessionBindingPath?: string): Promise<ReviewBridge> {
+  const bridge = new LocalReviewBridge(store, sessionBindingPath);
   try {
     await bridge.listen();
     return bridge;
@@ -59,7 +61,7 @@ class LocalReviewBridge implements ReviewBridge {
   #deliveryTimer: ReturnType<typeof setTimeout> | undefined;
   #disposed = false;
 
-  constructor(store: ReviewStore) {
+  constructor(store: ReviewStore, private readonly sessionBindingPath?: string) {
     this.#store = store;
     this.#server = createServer({ maxHeaderSize: 16 * 1024 }, (request, response) => {
       void this.#handle(request, response).catch((error: unknown) => {
@@ -155,12 +157,20 @@ class LocalReviewBridge implements ReviewBridge {
       respond(response, 401, { error: 'A valid review bridge token is required.' });
       return;
     }
-    this.#touch(request.headers['x-local-review-client']);
+    if (this.sessionBindingPath !== undefined) {
+      const binding = await readSessionBinding(this.sessionBindingPath, this.#store.workspaceRoot);
+      if (binding !== undefined && request.headers['x-local-review-session'] !== binding.sessionId) {
+        request.resume();
+        respond(response, 403, { error: 'Diese Claude-Unterhaltung ist nicht für dieses Review ausgewählt.' });
+        return;
+      }
+    }
     if (request.headers.origin !== undefined) {
       request.resume();
       respond(response, 403, { error: 'Browser-origin requests are not supported.' });
       return;
     }
+    this.#touch(request.headers['x-local-review-client']);
     const declaredLength = request.headers['content-length'];
     if (declaredLength !== undefined && Number(declaredLength) > maximumBodyBytes) {
       request.resume();
@@ -185,7 +195,8 @@ class LocalReviewBridge implements ReviewBridge {
       if (events.length > 0) {
         respond(response, 200, this.#payload(events));
       } else {
-        this.#beginPoll(after, response);
+        const sessionId = request.headers['x-local-review-session'];
+        this.#beginPoll(after, response, typeof sessionId === 'string' ? sessionId : undefined);
       }
       return;
     }
@@ -202,6 +213,13 @@ class LocalReviewBridge implements ReviewBridge {
         parsed = JSON.parse(body.toString('utf8'));
       } catch {
         throw new ReviewStoreError('Agent update body must contain valid JSON.');
+      }
+      if (this.sessionBindingPath !== undefined) {
+        const binding = await readSessionBinding(this.sessionBindingPath, this.#store.workspaceRoot);
+        if (binding !== undefined && request.headers['x-local-review-session'] !== binding.sessionId) {
+          respond(response, 403, { error: 'Die ausgewählte Claude-Unterhaltung hat sich geändert.' });
+          return;
+        }
       }
       const thread = await this.#store.updateFromAgent(parseAgentUpdate(parsed));
       respond(response, 200, { thread: projectThread(thread) });
@@ -284,14 +302,14 @@ class LocalReviewBridge implements ReviewBridge {
   }
 
   /** Wait for work without tying the connection to an editor event listener. */
-  #beginPoll(after: number, response: ServerResponse): void {
+  #beginPoll(after: number, response: ServerResponse, sessionId: string | undefined): void {
     const onClose = (): void => {
       clearTimeout(poll.timer);
       this.#polls.delete(poll);
     };
     const timer = setTimeout(() => { this.#finishPoll(poll); }, pollDurationMs);
     timer.unref();
-    const poll: PendingPoll = { after, response, timer, onClose };
+    const poll: PendingPoll = { after, sessionId, response, timer, onClose };
     this.#polls.add(poll);
     response.once('close', onClose);
   }
@@ -303,9 +321,21 @@ class LocalReviewBridge implements ReviewBridge {
     }
     clearTimeout(poll.timer);
     poll.response.off('close', poll.onClose);
-    respond(poll.response, status, status === 200
-      ? this.#payload(this.#eventsAfter(poll.after))
-      : { error: 'Review bridge is shutting down.' });
+    if (status !== 200) {
+      respond(poll.response, status, { error: 'Review bridge is shutting down.' });
+      return;
+    }
+    void (async () => {
+      try {
+        const binding = this.sessionBindingPath === undefined ? undefined
+          : await readSessionBinding(this.sessionBindingPath, this.#store.workspaceRoot);
+        if (binding !== undefined && poll.sessionId !== binding.sessionId) {
+          respond(poll.response, 403, { error: 'Die ausgewählte Claude-Unterhaltung hat sich geändert.' });
+        } else {
+          respond(poll.response, 200, this.#payload(this.#eventsAfter(poll.after)));
+        }
+      } catch { respond(poll.response, 503, { error: 'Die Claude-Verbindung muss erneut ausgewählt werden.' }); }
+    })();
   }
 
   /** Keep lifecycle listeners isolated from local request processing. */

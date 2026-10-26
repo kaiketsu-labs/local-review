@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.12
+
+- Search this project's recent Claude conversations by name or branch in VS Code; show which ones are running and retain Claude's own picker as a fallback.
+- Connect an already-running Claude Code 2.1.280+ conversation through a project-local plugin and two copyable commands. The original process and conversation stay active; only the explicitly selected session receives plugin feedback.
+- Preserve the current selection when copying a new/resume command; release it only when that command runs, refusing a stale handoff to another selected session.
+- Allow trusted workspace overrides for Claude and Node executable paths and report an outdated Claude version before installing the live plugin.
+- Add the organization README banner, quick-start choices and connection documentation. Keep credentials and runtime connection files outside Git.
+- Pass strict TypeScript and 256 tests. Verify authenticated attachment and a formatted inline reply in VS Code with unchanged process/session identity; record remaining cross-terminal and competing-live-session checks separately.
+
 ## 0.4.11
 
 - Remove VS Code's inherited inline-code background strips and padding from the composer preview, keeping one clean syntax-colored code card.

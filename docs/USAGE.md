@@ -6,7 +6,7 @@
 
 GitHub-style review conversations, directly in VS Code. Select a line in your local changes, ask a question or request a change, and send it straight to Claude Code in your terminal. Replies return to the same inline thread.
 
-[Install the preview](INSTALL.md) · [Download a VSIX](https://github.com/flucas96/local-review/releases) · [Report an issue](https://github.com/flucas96/local-review/issues/new/choose)
+[Install the preview](INSTALL.md) · [Download a VSIX](https://github.com/kaiketsu-labs/local-review/releases) · [Report an issue](https://github.com/kaiketsu-labs/local-review/issues/new/choose)
 
 [![Watch the Local Review demo](media/local-review-poster.jpg)](media/local-review-demo.mp4)
 
@@ -50,16 +50,17 @@ Edited or failed handoffs can be resumed after closing the preview during the sa
 
 ## Start in a minute
 
-Download a `.vsix` from [GitHub Releases](https://github.com/flucas96/local-review/releases), then choose **Extensions → … → Install from VSIX…** in VS Code. The extension is not published on the Marketplace yet.
+Download a `.vsix` from [GitHub Releases](https://github.com/kaiketsu-labs/local-review/releases), then choose **Extensions → … → Install from VSIX…** in VS Code. The extension is not published on the Marketplace yet.
 
 Open a trusted local Git repository and run **Local Review: Mit Claude verbinden**:
 
 | Choice | Result |
 | --- | --- |
-| **Unterhaltung auswählen** | Claude opens its session picker so you can resume the conversation that built the feature, with its history. |
+| **Unterhaltung auswählen** | Search this project's recent conversation names and branches; running conversations are marked. Claude's own picker remains available as a fallback. |
 | **Neue Unterhaltung** | Start a fresh conversation with review feedback enabled. |
+| **Laufende Unterhaltung verbinden** | Keep the original Claude process and conversation; use the setup view's two copyable commands inside it. Requires Claude Code 2.1.280+. |
 
-If your chosen conversation is still running, use `/exit` there before resuming it. This preserves the saved conversation; connecting a running process in place is not supported by this release. For a separate terminal app, use **Review → … → Verbindungsbefehl kopieren**, choose existing or new, and paste the command at the shell prompt. It includes the project folder and the review settings. Keep the project's VS Code window open.
+To connect a running conversation, prepare it in VS Code, then run `/reload-plugins --force` and `/local-review:connect` in the intended Claude conversation. Local Review installs a project-local plugin and waits for that session's actual receiver before showing **Feedback aktiv**. The reload rereads conversation context once. This works in either terminal location; the current authenticated walkthrough covers the integrated terminal. For a new/resumed conversation in a separate app, use **Review → … → Verbindungsbefehl kopieren** at a shell prompt. Keep the project's VS Code window open. [Connection details](CLAUDE-SESSION-ATTACH.md).
 
 Open **Local Review: Änderungen reviewen**, then click the gutter **+** or select code and press **⌘⌥M** on macOS / **Ctrl+Alt+M** on Linux. Write `/a Why this approach?` or `/i Make this change…` and choose **Senden**. Continue directly in the thread's reply field. The current interface uses German labels.
 
@@ -85,7 +86,7 @@ This is an early preview. Native conversations have distinct avatars and compact
 
 The [native UX verification report](UX-REVIEW-2026-10-21.md) includes a real authenticated new/resumed Claude conversation: an inline question recalled earlier conversation context, `/R` summarized the thread, and human resolution hid it. Screenshots and a sanitized event trace distinguish these results from earlier simulated walkthroughs. Separate-terminal execution and busy-agent delivery remain unverified in this pass. [Earlier end-to-end checks](QA-2026-10-21.md).
 
-The [daily-workflow audit](https://github.com/flucas96/local-review/issues/4) tracks follow-up work on Claude-to-thread navigation, unread replies and exact session ownership. The launcher opens VS Code's integrated terminal; the copy action supports a separate terminal. [Session connection details](CLAUDE-SESSION-ATTACH.md) distinguish resuming history from a future connection to an already-running process.
+The [daily-workflow audit](https://github.com/flucas96/local-review/issues/4) tracks follow-up work on Claude-to-thread navigation and unread replies. The launcher opens VS Code's integrated terminal; the copy action supports a separate terminal. [Session connection details](CLAUDE-SESSION-ATTACH.md) explain resuming history, connecting a running process and session ownership. The [0.4.12 QA report](QA-2026-10-26.md) records the real running-conversation roundtrip separately from process tests.
 
 - One local workspace folder and one intended agent session.
 - The background watcher expires after 24 hours; reconnect or send Claude a prompt to rearm it.

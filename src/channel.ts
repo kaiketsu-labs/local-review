@@ -16,6 +16,7 @@ import {
 } from './connection.js';
 import { buildReviewPrompt, reviewInstructions, reviewReplyInstructions } from './eventPrompt.js';
 import { maximumReplyLength } from './limits.js';
+import { ownsSession } from './sessionBinding.js';
 
 /** Produce a tool result without writing non-protocol output to standard output. */
 function result(text: string, isError = false): CallToolResult {
@@ -65,6 +66,9 @@ async function main(): Promise<void> {
   }
   const descriptorPath = resolve(descriptorArgument);
   const descriptor = await readDescriptor(descriptorPath);
+  const bindingPath = process.env['LOCAL_REVIEW_SESSION_BINDING'];
+  const sessionId = process.env['CLAUDE_CODE_SESSION_ID'];
+  const selected = async (): Promise<boolean> => bindingPath === undefined || await ownsSession(bindingPath, descriptor.workspaceRoot, sessionId);
   const shutdown = new AbortController();
   const bridge = new BridgeClient(descriptor, descriptorPath, shutdown.signal, noPush ? 'tools' : 'channel');
   const server = new Server({ name: 'local-review', version: '0.4.5' }, {
@@ -141,6 +145,7 @@ async function main(): Promise<void> {
 
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     try {
+      if (!await selected()) return result('Diese Unterhaltung ist nicht mit Local Review verbunden. In der gewünschten Unterhaltung /local-review:connect ausführen. Ältere Claude-Versionen benötigen ein Update.', true);
       if (request.params.name === 'list_pending_reviews') {
         const argsRecord = record(request.params.arguments ?? {});
         if (argsRecord === undefined || Object.keys(argsRecord).length !== 0) {
@@ -194,6 +199,10 @@ async function main(): Promise<void> {
     while (!shutdown.signal.aborted) {
       try {
         if (noPush) {
+          if (!await selected()) {
+            await pause(1_000, shutdown.signal);
+            continue;
+          }
           const health = record(await bridge.request('/health'));
           if (health?.workspaceRoot !== descriptor.workspaceRoot) {
             throw new Error('The review bridge returned a health response for a different workspace.');

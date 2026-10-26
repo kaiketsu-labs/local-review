@@ -14,7 +14,7 @@ Local Review is distributed as a VSIX preview. A Marketplace listing is not avai
 
 ## Install the extension
 
-1. Open [GitHub Releases](https://github.com/flucas96/local-review/releases) and download the attached `.vsix`. Preview releases may be marked **Pre-release**. If no release is available, a maintainer must first publish one.
+1. Open [GitHub Releases](https://github.com/kaiketsu-labs/local-review/releases) and download the attached `.vsix`. Preview releases may be marked **Pre-release**. If no release is available, a maintainer must first publish one.
 2. In VS Code, open **Extensions**, choose **… → Install from VSIX…**, and select the downloaded file.
 3. Open your local Git repository in a trusted VS Code window.
 
@@ -22,11 +22,11 @@ VS Code also supports `code --install-extension /path/to/local-review-VERSION.vs
 
 ## Connect Claude
 
-Run **Local Review: Mit Claude verbinden** from the Command Palette. **Unterhaltung auswählen** opens Claude's own session picker; choose the conversation that built the feature. **Neue Unterhaltung** starts a fresh conversation. The launcher never silently chooses the latest session.
+Run **Local Review: Mit Claude verbinden** from the Command Palette. **Unterhaltung auswählen** shows this project's recent conversations with names, branches and a **Läuft** indicator. Search by name or branch; **Weitere Unterhaltungen …** opens Claude's own picker. **Neue Unterhaltung** starts a fresh conversation. The launcher never silently chooses the latest session.
 
-If the desired conversation is still running, finish its current work and use `/exit` in that terminal before selecting it. Its saved history is retained. This release resumes a conversation with the review configuration; it does not add the connection to an arbitrary already-running process.
+For a conversation already running in the project, choose **Laufende Unterhaltung verbinden** (also available directly in the Command Palette). With Claude Code **2.1.280+**, Local Review installs a local plugin using Claude's plugin manager. In the intended conversation, run the two commands from the compact setup view: `/reload-plugins --force`, then `/local-review:connect`. Copy buttons avoid typing. The original process and conversation remain active; the reload rereads conversation context once. Wait for **Feedback aktiv**. This flow works independently of the terminal's location; the authenticated walkthrough currently covers the integrated terminal.
 
-The extension starts Claude in an integrated terminal with the review connection attached. Complete any normal Claude trust or tool-permission prompts. An arbitrary Claude terminal opened earlier is not attached automatically.
+The previous/new choices start Claude in an integrated terminal with the review connection attached. Complete normal Claude trust or tool-permission prompts. An arbitrary terminal is never attached just because it happens to be open. Running conversations must be in this project's root directory and explicitly connected; a ticket expires after 15 minutes, after which the setup action can be run again.
 
 After an update, reload the VS Code window and reconnect Claude once so it loads the new helpers. A normal window reload recognizes this project's existing **Claude · Local Review** terminal. **Terminal anzeigen** reopens it. **Unterhaltung wechseln** (or **Verbindung neu starten** when delivery is inactive) explicitly replaces that managed terminal after you choose existing/new; cancelling or failing setup keeps it intact. External terminals are never closed by this action. If another receiver is active without a managed terminal, the launcher asks you to exit it first; readiness expires within 45 seconds.
 
@@ -34,7 +34,7 @@ After an update, reload the VS Code window and reconnect Claude once so it loads
 
 Choose **Review → … → Verbindungsbefehl kopieren** or the same command under **Local Review** in the Command Palette. Choose **Unterhaltung auswählen** or **Neue Unterhaltung**, then paste at a shell prompt in Terminal, iTerm or another local terminal. If Claude is running there, use `/exit` first. The command changes to the project folder and starts Claude with the same private review configuration as the integrated launcher. Copying does not start or stop a session. Keep this project's VS Code window open, and use only one review receiver for the project.
 
-Claude's usual project configuration and tool approvals still apply. The generated command does not force a model, remove other MCP servers or bypass permissions. Custom options supplied only to the old Claude invocation must be supplied again; see [Claude session restoration](https://code.claude.com/docs/en/sessions#what-a-resumed-session-restores).
+Claude's usual project configuration and tool approvals still apply. The generated command does not force a model, remove other MCP servers or bypass permissions. A copied command preserves the current live-session selection until execution and refuses to clear a different, subsequently selected session. Custom options supplied only to the old Claude invocation must be supplied again on resume; see [Claude session restoration](https://code.claude.com/docs/en/sessions#what-a-resumed-session-restores).
 
 The status bar shows **Review · Verbinden** without a live connection, **Review · Zustellung pausiert** when only the tools are connected, and **Review** when the feedback receiver is active. Older helpers cannot report this readiness signal until reconnected. A ready connection still does not mean Claude has acknowledged an individual comment.
 
@@ -68,6 +68,9 @@ Install the GitHub CLI and sign in with `gh auth login` if you want PR handoffs.
 | --- | --- |
 | Claude or Node cannot be found | Set **Local Review: Claude Path** or **Local Review: Node Path** to the full executable path. |
 | Multiple Claude installations | Set the Claude path explicitly; different terminals may resolve different versions. |
+| Running connection reports an old Claude version | Use Claude Code 2.1.280+ and set `localReview.claudePath` to that installation. Trusted workspace settings may override both executable paths. |
+| `/local-review:connect` is unknown | Run `/reload-plugins --force` in the intended conversation after preparing the connection in VS Code. Check local plugin policy if installation failed. |
+| Another conversation is selected | Finish or `/exit` the old receiver, allow up to 45 seconds for readiness to expire, then prepare the desired connection in VS Code. Automatic takeover is refused. |
 | Claude has exited but the terminal remains | Run **Mit Claude verbinden** again. Use **Verbindung neu starten** when offered. |
 | **Zustellung pausiert** after an update | Restart the managed connection once; older helpers do not report receiver readiness. |
 | A comment remains waiting | Open the connected terminal and check Claude's startup and tool approval prompts. A live bridge is not proof that Claude acknowledged the event. |
@@ -77,4 +80,4 @@ Install the GitHub CLI and sign in with `gh auth login` if you want PR handoffs.
 
 Keep **Local Review: Transport** set to **hooks** for the default connection. The optional **channels** mode uses Claude's development-channel interface and depends on account availability, organization policy, and startup confirmation. Choose it before connecting a new session.
 
-For unresolved problems, [open an issue](https://github.com/flucas96/local-review/issues/new/choose) with your extension, VS Code, Node, and Claude versions plus reproducible steps. Remove credentials and private code from logs before sharing them.
+For unresolved problems, [open an issue](https://github.com/kaiketsu-labs/local-review/issues/new/choose) with your extension, VS Code, Node, and Claude versions plus reproducible steps. Remove credentials and private code from logs before sharing them.

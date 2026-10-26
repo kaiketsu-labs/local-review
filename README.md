@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner.svg" alt="Local Review: Review the code. Keep the conversation." width="100%">
+  <img src="docs/media/banner.png" alt="Local Review: Review the code. Keep the conversation." width="100%">
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@ Local Review brings that conversation into the editor: **feedback attached to a 
 | 🎨 **Readable code** | Padded code cards, syntax colors and a small editor icon for opening the source with native navigation. |
 | 📌 **Keep your draft** | An optional compact side composer follows new selections while empty and keeps written feedback attached to its original code. |
 | ✅ **You resolve it** | Claude reports progress and replies. You decide when a thread is done; completed threads can be reopened. |
-| 🔁 **Continue your conversation** | Resume a specific Claude conversation with its history, or start a new one. |
+| 🔁 **Choose your conversation** | Search saved conversations by name or branch, start a new one, or connect the conversation already running in your terminal. |
 | 🔗 **Carry it into a PR** | Preview summaries and unresolved questions, edit the text, then explicitly publish to the branch's existing GitHub PR. |
 | 🎙️ **Speak your feedback** | Use existing macOS Dictation in the comment field, without an extra recorder or transcription account. |
 
@@ -87,9 +87,17 @@ code --install-extension ./local-review-<version>.vsix --force
 
 **Connect Claude**
 
-Open a trusted local Git repository and run **Local Review: Mit Claude verbinden**. Choose a previous conversation to resume with its history, or create a new one. To resume a conversation that is still running, finish it with `/exit` first.
+Open a trusted local Git repository and run **Local Review: Mit Claude verbinden**.
 
-For a separate terminal app, use **Review → … → Verbindungsbefehl kopieren** and run the copied command at its shell prompt. Keep the project's VS Code window open. In-place connection to a running conversation is currently being developed; see [connection details](docs/CLAUDE-SESSION-ATTACH.md).
+| Choose | What happens |
+| --- | --- |
+| **Unterhaltung auswählen** | Search this project's recent conversations by name or branch. Running conversations are marked **Läuft**. |
+| **Neue Unterhaltung** | Start a fresh Claude conversation with review feedback enabled. |
+| **Laufende Unterhaltung verbinden** | Keep your original Claude process and conversation. Copy the two commands shown in VS Code into that conversation. |
+
+To connect a running conversation, execute `/reload-plugins --force`, then `/local-review:connect` inside it. This requires **Claude Code 2.1.280+** and installs a project-local plugin; reloading rereads the conversation context once. Wait for **Feedback aktiv** before sending a comment.
+
+For a separate terminal app, the same running-conversation commands apply. To start or resume there instead, use **Review → … → Verbindungsbefehl kopieren** at its shell prompt. Keep the project's VS Code window open. [Connection details →](docs/CLAUDE-SESSION-ATTACH.md)
 
 **Leave your first comment**
 
@@ -117,7 +125,7 @@ sequenceDiagram
 
 A small local helper waits for saved feedback; the LLM does not repeatedly check for comments. Claude answers through review tools, which return the reply to VS Code. A connection or notification alone does not acknowledge delivery.
 
-Threads and private connection files live in VS Code's workspace storage. The launched-session flow passes settings to Claude without replacing your existing project configuration. [Architecture and walkthrough →](docs/HOW-IT-WORKS.md)
+Threads and private connection files live in VS Code's workspace storage. The launched-session flow passes settings to Claude without replacing your existing project configuration. Running-conversation setup uses Claude's plugin manager with local scope and preserves existing settings. Only the explicitly selected conversation can receive feedback through that plugin. [Architecture and walkthrough →](docs/HOW-IT-WORKS.md)
 
 ## Make it yours
 
@@ -139,12 +147,12 @@ The interface currently uses German labels. Code previews provide display colors
 - [x] Specific saved conversation or new conversation
 - [x] Human resolution, hidden completed threads and reopening
 - [x] Editable preview before publishing to an existing PR
-- [ ] Connect to an already-running conversation without restarting it
+- [x] Connect to an already-running conversation without restarting it
 - [ ] Unread reply navigation and direct Claude-to-thread navigation
 - [ ] VS Code Marketplace / Open VSX publication
 - [ ] Linux and Windows verification
 
-The [native verification report](docs/UX-REVIEW-2026-10-21.md) records real VS Code clicks and an authenticated Claude resume roundtrip, separately from simulated tests. The 0.4.11 check passed strict TypeScript and 242 tests. Busy-agent delivery, a full separate-terminal roundtrip and real remote PR publication remain separate verification tasks. [Review tracker →](docs/REVIEW.md)
+The [running-conversation verification](docs/QA-2026-10-26.md) records an authenticated Claude session started before setup, unchanged process/session identity after connecting, and a real inline question and formatted reply. Strict TypeScript and **256 tests** pass. Busy-agent delivery, a full separate-terminal roundtrip and real remote PR publication remain separate verification tasks. [Earlier native review](docs/UX-REVIEW-2026-10-21.md) · [Review tracker](docs/REVIEW.md)
 
 ## Development
 

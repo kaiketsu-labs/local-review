@@ -209,6 +209,7 @@ export class BridgeClient {
     private readonly descriptorPath: string,
     private readonly signal: AbortSignal,
     private readonly role: BridgeClientRole = 'tools',
+    private readonly sessionId: string | undefined = process.env['CLAUDE_CODE_SESSION_ID'],
   ) {
     this.descriptor = descriptor;
   }
@@ -241,6 +242,7 @@ export class BridgeClient {
         Accept: 'application/json',
         'X-Local-Review-Client': this.role,
       };
+      if (isIdentifier(this.sessionId)) headers['X-Local-Review-Session'] = this.sessionId;
       if (update !== undefined) headers['Content-Type'] = 'application/json';
       const response = await fetch(endpoint, {
         method: update === undefined ? 'GET' : 'POST',
