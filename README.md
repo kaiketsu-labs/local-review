@@ -147,7 +147,7 @@ Some labels are still German. On the review page, Cmd/Ctrl-click a name to peek 
 
 Guide notes are stored as threads that start with Claude's message. Versions before guided review cannot load a PR's comments once it has a guide.
 
-The [running-conversation verification](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/QA-2026-10-26.md) records an authenticated Claude session started before setup, unchanged process/session identity after connecting, and a real inline question and formatted reply. Strict TypeScript and **272 tests** pass. Busy-agent delivery, a full separate-terminal roundtrip and real remote PR publication remain separate verification tasks. [Earlier native review](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/UX-REVIEW-2026-10-21.md) · [Review tracker](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/REVIEW.md)
+The [running-conversation verification](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/QA-2026-10-26.md) records an authenticated Claude session started before setup, unchanged process/session identity after connecting, and a real inline question and formatted reply. Strict TypeScript and **273 tests** pass. Busy-agent delivery, a full separate-terminal roundtrip and real remote PR publication remain separate verification tasks. [Earlier native review](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/UX-REVIEW-2026-10-21.md) · [Review tracker](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/REVIEW.md)
 
 ## Development
 

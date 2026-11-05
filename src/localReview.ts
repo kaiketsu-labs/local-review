@@ -31,7 +31,7 @@ export function listRepositoryFiles(root: string): Promise<readonly string[]> {
 }
 
 /** A file shown whole, or undefined when it is not a readable file. */
-async function wholeFile(root: string, path: string, change: 'added' | 'unchanged'): Promise<FileDiff | undefined> {
+export async function wholeFile(root: string, path: string, change: 'added' | 'unchanged'): Promise<FileDiff | undefined> {
   const file = join(root, path);
   const info = await stat(file).catch(() => undefined);
   if (info?.isFile() !== true) return undefined;

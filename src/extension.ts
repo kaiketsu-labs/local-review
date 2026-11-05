@@ -14,7 +14,7 @@ import { sharedPerTurn } from './autoSync.js';
 import { type PullRequestRole, ensureWorktree, git, hasWorktree, readPullRequestBase, removeWorktree, reviewDataPath, worktreePath } from './worktrees.js';
 import { buildGuide, groupReadMarks, guideOutline } from './prAnalysis.js';
 import { readSavedAnalysis } from './prAnalysisRunner.js';
-import { highlightSource, readPlainPullRequestDiff, readPullRequestDiff, type FileDiff } from './unifiedDiff.js';
+import { highlightSource, readPlainPullRequestDiff, readPullRequestDiff, savedCodeDiff, type FileDiff } from './unifiedDiff.js';
 import { fenceFilePaths, markdownHtml } from './markdown.js';
 import { readFilePreview, readMediaSides } from './fileContent.js';
 import { DefinitionPeeks } from './definitions.js';
@@ -35,7 +35,8 @@ import { prepareHighlighting, useEditorHighlighter } from './codePreview.js';
 import { editorHighlighter } from './textMate.js';
 import { githubFeedbackRequest, placeComment } from './pullRequestComments.js';
 import type { CodeAnchor, ReviewBridge, ReviewStore, ReviewThread } from './contracts.js';
-import { LocalReview, toDisposable } from './localReview.js';
+import { readFileIcons } from './fileIcons.js';
+import { LocalReview, toDisposable, wholeFile } from './localReview.js';
 import { LocalFilesView } from './localFilesView.js';
 
 let activeStore: ReviewStore | undefined;
@@ -125,6 +126,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (await git(folder, ['cat-file', '-e', `${oid}^{commit}`]).then(() => true, () => false)) return;
         await git(folder, ['fetch', '--quiet', 'origin', oid]).catch(() => { throw new Error('That commit is no longer on GitHub, probably after a force push.'); });
       };
+      /** Files opened for resolved Local threads outside the diff; files with open Local threads show without being opened. */
+      const revealed = new Set<string>();
+      /** Files outside the diff with Local threads, shown whole in tabs, or as their saved code once the file is gone. */
+      const threadFiles = async (shown: readonly string[]): Promise<FileDiff[]> => {
+        const threads = opened.session.store.threads;
+        const paths = [...new Set([...threads.filter((thread) => !thread.resolved).map((thread) => thread.anchor.path), ...revealed])]
+          .filter((path) => isWorkspaceRelativePath(path) && !shown.includes(path));
+        await prepareHighlighting(paths);
+        return Promise.all(paths.map(async (path) => await wholeFile(folder, path, 'unchanged')
+          ?? savedCodeDiff(path, threads.filter((thread) => thread.anchor.path === path).map((thread) => thread.anchor))));
+      };
       const readFiles = async (select?: DiffSelection): Promise<FilesView> => {
         const wanted = select ?? selection;
         const { range } = wanted;
@@ -147,7 +159,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         selectionAtHead = to === undefined;
         diffPaths = files.map((file) => file.path);
         diffFiles = files;
-        return { files, selection, atHead: selectionAtHead };
+        const tabs = range.kind === 'all' ? await threadFiles(diffPaths) : [];
+        const icons = tabs.length === 0 ? undefined : await readFileIcons(tabs.map((file) => file.path)).catch(() => undefined);
+        return { files: [...files, ...tabs], selection, atHead: selectionAtHead, ...icons === undefined ? {} : { icons } };
       };
       const readAnalysis = async (): Promise<AnalysisView> => {
         const result = await opened.analysis.result();
@@ -333,7 +347,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           changedOnGitHub();
         },
         retry: () => { opened.runner.retry(); },
-        revealThread: async (id) => { await openPullRequestFile(storageRoot, repository, current(), findThread(id).anchor.path); },
+        revealThread: async (id) => {
+          const { path } = findThread(id).anchor;
+          if (selection.range.kind !== 'all') { await openPullRequestFile(storageRoot, repository, current(), path); return; }
+          revealed.add(path);
+          revealOpenPage(`${repository}#${pullRequest.number}`, { path, reload: true });
+        },
+        closeFile: async (path) => { revealed.delete(path); },
         submitReview: async (event, body) => {
           await provider.submitReview(pullRequest.number, event, body);
           void loadDetails();

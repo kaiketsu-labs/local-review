@@ -60,7 +60,7 @@ const saved = (api.getState() ?? {}) as Saved;
 const nonce = document.currentScript?.nonce ?? '';
 let layout: Layout = saved.layout === 'split' ? 'split' : 'unified';
 let view: View = saved.view === 'guide' || (saved.view === undefined && saved.layout === 'guided') ? 'guide' : 'files';
-/** The local page's open file tab, an unchanged file shown alone; undefined shows the Changes tab. */
+/** The page's open file tab, a file outside the changes shown alone; undefined shows the Changes tab. */
 let fileTab = saved.fileTab;
 /** The file tab last scrolled into view, so redraws keep the tab row where the user scrolled it. */
 let scrolledTab: string | undefined;
@@ -2872,9 +2872,9 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
   });
 }
 
-/** Unchanged files the local page shows in their own tabs. */
+/** Files outside the changes that the page shows in their own tabs. */
 function tabFiles(): readonly FileDiff[] {
-  return current?.local && files ? files.filter((file) => file.change === 'unchanged') : [];
+  return files ? files.filter((file) => file.change === 'unchanged') : [];
 }
 
 /** The tab that shows `path`: its own when it is an opened unchanged file, else Changes. */
@@ -3385,7 +3385,12 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   const badge = el('span', 'badge ' + file.change, changeLetters[file.change]);
   badge.title = file.change;
   const stats = el('span', 'stats');
-  if (file.change === 'unchanged') stats.append(el('span', 'file-chip', 'Not changed'));
+  if (file.saved) {
+    const chip = el('span', 'file-chip', 'Saved code');
+    chip.title = 'This file no longer exists. Showing the code saved with its comments.';
+    stats.append(chip);
+  }
+  else if (file.change === 'unchanged') stats.append(el('span', 'file-chip', 'Not changed'));
   else stats.append(el('span', 'stat-add', '+' + file.additions), ' ', el('span', 'stat-del', '−' + file.deletions));
   const label = el('label', 'viewed');
   const check = el('input');
@@ -3398,6 +3403,7 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   });
   label.append(check, 'Viewed');
   const open = button('Open in editor', () => post({ action: 'editor', path: file.path }));
+  open.hidden = file.saved === true;
   const whole = fullFile(file);
   const full = button(whole ? 'Diff only' : 'Full file', () => {
     expanded.set(file.path, whole ? new Map() : new Map(Array.from({ length: file.hunks.length + 1 }, (_, index) => [index, { top: Infinity, bottom: 0 }])));
