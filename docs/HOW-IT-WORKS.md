@@ -12,7 +12,7 @@ Die Bilder sind nachgestellte Beispiele der Bedienung, keine Aufnahme einer gepr
 
 ## Direkt im Code kommentieren
 
-Öffne in der Seitenleiste die Ansicht **Local** und wähle **Review local changes**. Die Review-Seite zeigt deine noch nicht committeten Änderungen und neuen Dateien. Klicke auf eine Zeilennummer, schreibe zum Beispiel „Nutze exponentielles Backoff.“ und wähle **Implement**. Aus dem Editor öffnet **⌘⌥M / Ctrl+Alt+M** einen Kommentar zu den markierten Zeilen auf der Seite. Claude bekommt deinen Kommentar zusammen mit Datei, Zeilen und Codekontext. Ein ungesendeter Entwurf bleibt ein Entwurf.
+Öffne in der Seitenleiste die Ansicht **Local** und wähle **Review local changes**. Die Review-Seite zeigt deine noch nicht committeten Änderungen und neuen Dateien. Klicke auf eine Zeilennummer, schreibe zum Beispiel „Nutze exponentielles Backoff.“ und wähle **Implement**. Claude bekommt deinen Kommentar zusammen mit Datei, Zeilen und Codekontext. Ein ungesendeter Entwurf bleibt ein Entwurf.
 
 | Schaltfläche | Was du möchtest |
 | --- | --- |

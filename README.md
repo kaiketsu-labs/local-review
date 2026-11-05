@@ -42,7 +42,6 @@ Pair Review brings that conversation into the editor: **feedback attached to a l
 | 💬 **Review at the line** | The review page shows your uncommitted changes, new files and any file you open from the **Local** view, with comment threads on their lines. |
 | ⚡ **Automatic delivery** | Send feedback once; your connected Claude conversation receives it without a separate review submission. |
 | 🎛️ **Ask or implement** | **Ask Claude** discusses the lines; **Implement** asks Claude to change them. |
-| ✍️ **Comment from the editor** | Select code and press **⌘⌥M** / **Ctrl+Alt+M** to open a comment on those lines on the review page. |
 | ✅ **You resolve it** | Claude reports progress and replies. You decide when a thread is done; completed threads can be reopened. |
 | 🔁 **Choose your conversation** | Search saved conversations by name or branch, start a new one, or connect the conversation already running in your terminal. |
 | 🧭 **Guided PR review** | Claude groups a PR's changes by severity, orders them for reading and explains each step. Every change lands in one step, so ticking Viewed on each step covers the whole PR. The Pull Requests sidebar lists the steps under the PR; click one to jump to it. |
@@ -84,13 +83,16 @@ code --install-extension ./pair-review-<version>.vsix --force
 
 **Connect Claude**
 
-Open a trusted local Git repository and run **Pair Review: Mit Claude verbinden**.
+Open a trusted local Git repository, click **Review local changes** in the **Local** view, then **Connect Claude** on the review page.
 
 | Choose | What happens |
 | --- | --- |
-| **Unterhaltung auswählen** | Search this project's recent conversations by name or branch. Running conversations are marked **Läuft**. |
-| **Neue Unterhaltung** | Start a fresh Claude conversation with review feedback enabled. |
-| **Laufende Unterhaltung verbinden** | Keep your original Claude process and conversation. Copy the two commands shown in VS Code into that conversation. |
+| **New conversation** | Start a fresh Claude conversation in a VS Code terminal, with review feedback enabled. |
+| **Resume a conversation…** | Search this project's recent conversations by name or branch. Running conversations are marked **Running**. |
+| **Connect running Claude** | Keep your original Claude process and conversation. Run the two commands the menu shows in that conversation. |
+| **Copy command** | Copy a start command for a terminal outside VS Code. |
+
+Once connected, the button reads **Open in terminal** and the same menu switches conversations. Without a review page open, **Pair Review: Mit Claude verbinden** in the Command Palette offers the same choices.
 
 To connect a running conversation, execute `/reload-plugins --force`, then `/pair-review:connect` inside it. This requires **Claude Code 2.1.280+** and installs a project-local plugin; reloading rereads the conversation context once. Wait for **Feedback aktiv** before sending a comment.
 
@@ -98,7 +100,7 @@ For a separate terminal app, the same running-conversation commands apply. To st
 
 **Leave your first comment**
 
-Open the **Local** view in the Pair Review sidebar and click **Review local changes**, or select code in the editor and press **⌘⌥M** on macOS / **Ctrl+Alt+M** on Linux. On the review page, click a line number, write your feedback and choose **Ask Claude** or **Implement**. Continue in the thread's **Reply**. Clicking a file in the **Local** view shows it on the page, even without changes.
+Open the **Local** view in the Pair Review sidebar and click **Review local changes**. On the review page, click a line number, write your feedback and choose **Ask Claude** or **Implement**. Continue in the thread's **Reply**. Clicking a file in the **Local** view shows it on the page, even without changes. With several checkouts, such as Git worktrees of the same repository, the **Local** view lists each one; every checkout gets its own review page tab and its own Claude conversation.
 
 Requires **VS Code 1.100+**, **Node.js 20+**, **Git**, and authenticated **Claude Code with `asyncRewake` support**. macOS is the verified primary platform; Linux is unverified, and automatic Windows connection is not supported yet. [Setup and troubleshooting →](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/INSTALL.md)
 

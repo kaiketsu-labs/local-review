@@ -43,7 +43,7 @@ Pair Review is a VS Code extension for reviewing code with Claude on one review 
 ## Product invariants
 
 - Submitted comments are delivered automatically. Unsent keystrokes are not agent instructions.
-- Comments are written on the review page, for local changes and PRs, and sent with **Ask Claude** or **Implement**. The editor shortcut opens a comment on the selected lines there; it does not add native editor comments.
+- Comments are written on the review page, for local changes and PRs, and sent with **Ask Claude** or **Implement**. There is no editor command or native editor comment.
 - Explain automatic feedback delivery in plain language. Keep transport names in optional technical details; the hook-based default supports the terminal/gateway workflow while Channels remains an experimental opt-in.
 - Voice input uses the user's existing macOS Dictation. Do not add an audio recorder or transcription service unless requested separately.
 - Keep conversations anchored to their code. Replies must not silently change targets.

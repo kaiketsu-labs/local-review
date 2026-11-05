@@ -6,7 +6,7 @@ import { requireNodeRuntime, resolveExecutable } from './executables.js';
 import { readPrivateJson, writePrivateJson } from './privateFiles.js';
 import { quotePosix } from './shell.js';
 import { installLivePlugin, showLiveConnection } from './liveSetup.js';
-import { listClaudeConversations } from './claudeSessions.js';
+import { type ClaudeConversation, listClaudeConversations } from './claudeSessions.js';
 import { readSessionBinding } from './sessionBinding.js';
 export { quotePosix } from './shell.js';
 
@@ -118,12 +118,28 @@ async function prepareClaudeCommand(
   return `${release} && ${launch}`;
 }
 
+/** How the review page connects Claude: show its terminal, start or resume a conversation there, prepare a running one, or copy a start command. */
+export type ClaudeChoice = { readonly how: 'show' | 'new' | 'running' | 'copy' } | { readonly how: 'resume'; readonly session?: string };
+
 /** Claude connection actions for one review session. */
 export interface ClaudeLauncher extends vscode.Disposable {
   start(): Promise<void>;
   copyCommand(): Promise<void>;
   connectRunning(): Promise<void>;
+  /** Whether this session's review terminal is open. */
+  readonly hasTerminal: boolean;
+  /** Fires when the review terminal opens or closes. */
+  readonly onDidChange: vscode.Event<void>;
+  /** Recent conversations of this session's folder, for the page's Resume list. */
+  conversations(): Promise<readonly ClaudeConversation[]>;
+  /** Act on a choice from the review page; returns a notice for the page, and throws instead of showing VS Code messages. */
+  connect(choice: ClaudeChoice): Promise<string | undefined>;
 }
+
+/** Another conversation still receives comments, so a new one must wait; commands report it as information, not as a failure. */
+class ReceiverConflict extends Error {}
+
+const copiedNotice = 'Command copied. Run it in a terminal; exit a running Claude there first.';
 
 /** Connect a chosen or new conversation for one session, or copy its command for a separate terminal. */
 export function createClaudeLauncher(
@@ -133,62 +149,106 @@ export function createClaudeLauncher(
   terminalName = reviewTerminalName,
 ): ClaudeLauncher {
   const inactiveTerminals = new WeakSet<vscode.Terminal>();
+  const changed = new vscode.EventEmitter<void>();
   let terminal: vscode.Terminal | undefined = existingReviewTerminal(bridge.descriptor.workspaceRoot, inactiveTerminals, terminalName);
   let launching = false;
   const closed = vscode.window.onDidCloseTerminal(closedTerminal => {
     inactiveTerminals.add(closedTerminal);
-    if (terminal === closedTerminal) terminal = undefined;
+    if (terminal === closedTerminal) { terminal = undefined; changed.fire(); }
   });
   const ended = vscode.window.onDidEndTerminalShellExecution(event => {
     inactiveTerminals.add(event.terminal);
-    if (event.terminal === terminal) terminal = undefined;
+    if (event.terminal === terminal) { terminal = undefined; changed.fire(); }
   });
   const isLive = (candidate: vscode.Terminal | undefined): candidate is vscode.Terminal => candidate !== undefined
     && !inactiveTerminals.has(candidate) && candidate.exitStatus === undefined && vscode.window.terminals.includes(candidate);
-  const receiverConflict = (ownedTerminal: vscode.Terminal | undefined): boolean => {
-    if (bridge.state.deliveryReady !== true || isLive(ownedTerminal)) return false;
-    void vscode.window.showInformationMessage('Die Review-Verbindung ist noch aktiv oder wird getrennt. Falls Claude noch läuft: /exit. Der Status aktualisiert sich innerhalb von 45 Sekunden.');
-    return true;
+  const liveTerminal = (): vscode.Terminal | undefined => {
+    if (!isLive(terminal)) terminal = existingReviewTerminal(bridge.descriptor.workspaceRoot, inactiveTerminals, terminalName);
+    return terminal;
   };
-  const guarded = (action: () => Promise<void>) => async (): Promise<void> => {
-    if (launching) return;
+  /** Why a new receiver must wait: another conversation outside the review terminal still receives comments. */
+  const receiverConflict = (ownedTerminal: vscode.Terminal | undefined): string | undefined => {
+    if (bridge.state.deliveryReady !== true || isLive(ownedTerminal)) return undefined;
+    return 'Die Review-Verbindung ist noch aktiv oder wird getrennt. Falls Claude noch läuft: /exit. Der Status aktualisiert sich innerhalb von 45 Sekunden.';
+  };
+  const requireNoConflict = (ownedTerminal: vscode.Terminal | undefined): void => {
+    const conflict = receiverConflict(ownedTerminal);
+    if (conflict !== undefined) throw new ReceiverConflict(conflict);
+  };
+  /** Run one connection action at a time; a second one while it runs is dropped. */
+  const exclusive = async (action: () => Promise<string | undefined>): Promise<string | undefined> => {
+    if (launching) return undefined;
     launching = true;
     try {
       if (process.platform === 'win32') {
         throw new Error('Die automatische Claude-Verbindung dieser ersten Version unterstützt macOS und Linux. Windows folgt nach einer eigenen Prüfung.');
       }
-      await action();
-    } catch (error: unknown) {
-      void vscode.window.showErrorMessage(`Pair Review: ${error instanceof Error ? error.message : String(error)}`);
+      return await action();
     } finally {
       launching = false;
     }
   };
-  const connectRunning = async (): Promise<void> => {
-    if (receiverConflict(undefined)) return;
+  /** For commands without a page: problems become VS Code messages. */
+  const guarded = (action: () => Promise<void>) => async (): Promise<void> => {
+    try {
+      await exclusive(async () => { await action(); return undefined; });
+    } catch (error: unknown) {
+      if (error instanceof ReceiverConflict) void vscode.window.showInformationMessage(error.message);
+      else void vscode.window.showErrorMessage(`Pair Review: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const forgetSelectedSession = async (): Promise<void> => {
+    await unlink(join(storagePath, 'selected-session.json')).catch((error: unknown) => {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    });
+  };
+  /** Install the plugin a running Claude loads to connect itself; that conversation then runs `/pair-review:connect`. */
+  const prepareRunning = async (): Promise<void> => {
+    requireNoConflict(undefined);
     const configuration = vscode.workspace.getConfiguration('pairReview');
     const [executable, nodePath] = await Promise.all([
       resolveExecutable(configuration.get<string>('claudePath', 'claude'), bridge.descriptor.workspaceRoot),
       resolveExecutable(configuration.get<string>('nodePath', 'node'), bridge.descriptor.workspaceRoot),
     ]);
     await requireNodeRuntime(nodePath);
-    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Laufendes Claude verbinden' }, async () => {
-      await installLivePlugin(context, bridge, storagePath, executable, nodePath);
-    });
-    if (receiverConflict(undefined)) {
+    await installLivePlugin(context, bridge, storagePath, executable, nodePath);
+    if (receiverConflict(undefined) !== undefined) {
       await unlink(join(storagePath, 'live', 'connect-ticket.json')).catch(() => undefined);
-      return;
+      requireNoConflict(undefined);
     }
-    await unlink(join(storagePath, 'selected-session.json')).catch((error: unknown) => {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-    });
+    await forgetSelectedSession();
+  };
+  const connectRunning = async (): Promise<void> => {
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Laufendes Claude verbinden' }, prepareRunning);
     context.subscriptions.push(showLiveConnection(bridge));
   };
+  /** Start Claude in the review terminal, replacing the conversation that runs there. */
+  const launch = async (resume: boolean | string): Promise<void> => {
+    const replaceTerminal = liveTerminal();
+    requireNoConflict(replaceTerminal);
+    const command = await prepareClaudeCommand(context, bridge, storagePath, resume);
+    requireNoConflict(replaceTerminal);
+    await forgetSelectedSession();
+    if (isLive(replaceTerminal)) {
+      inactiveTerminals.add(replaceTerminal);
+      replaceTerminal.dispose();
+    }
+    terminal = vscode.window.createTerminal({ name: terminalName, cwd: bridge.descriptor.workspaceRoot });
+    terminal.show();
+    terminal.sendText(command);
+    changed.fire();
+  };
+  const copy = async (resume: boolean | string): Promise<void> => {
+    const command = await prepareClaudeCommand(context, bridge, storagePath, resume);
+    await vscode.env.clipboard.writeText(`cd ${quotePosix(bridge.descriptor.workspaceRoot)} && ${command}`);
+  };
   const start = guarded(async () => {
-    let replaceTerminal: vscode.Terminal | undefined;
-    if (!isLive(terminal)) terminal = existingReviewTerminal(bridge.descriptor.workspaceRoot, inactiveTerminals, terminalName);
-    const currentTerminal = terminal;
-    if (receiverConflict(currentTerminal)) return;
+    const currentTerminal = liveTerminal();
+    const conflict = receiverConflict(currentTerminal);
+    if (conflict !== undefined) {
+      void vscode.window.showInformationMessage(conflict);
+      return;
+    }
     if (currentTerminal !== undefined) {
       const show = { label: 'Terminal anzeigen', description: 'Die bestehende Unterhaltung öffnen', restart: false };
       const restart = {
@@ -199,31 +259,16 @@ export function createClaudeLauncher(
       const action = await vscode.window.showQuickPick(bridge.state.deliveryReady === true ? [show, restart] : [restart, show], {
         title: bridge.state.deliveryReady === true ? 'Claude Code ist verbunden' : 'Automatische Zustellung wiederherstellen',
       });
-      if (action === undefined || receiverConflict(currentTerminal)) return;
+      if (action === undefined) return;
       if (!action.restart) {
         if (isLive(currentTerminal)) currentTerminal.show();
         return;
       }
-      replaceTerminal = currentTerminal;
     }
     const resume = await selectConversation(bridge.descriptor.workspaceRoot);
-    if (resume === undefined || receiverConflict(replaceTerminal)) return;
-    if (resume === 'running') {
-      await connectRunning();
-      return;
-    }
-    const launch = await prepareClaudeCommand(context, bridge, storagePath, resume);
-    if (receiverConflict(replaceTerminal)) return;
-    await unlink(join(storagePath, 'selected-session.json')).catch((error: unknown) => {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-    });
-    if (isLive(replaceTerminal)) {
-      inactiveTerminals.add(replaceTerminal);
-      replaceTerminal.dispose();
-    }
-    terminal = vscode.window.createTerminal({ name: terminalName, cwd: bridge.descriptor.workspaceRoot });
-    terminal.show();
-    terminal.sendText(launch);
+    if (resume === undefined) return;
+    if (resume === 'running') await connectRunning();
+    else await launch(resume);
   });
   const copyCommand = guarded(async () => {
     const resume = await selectConversation(bridge.descriptor.workspaceRoot, false);
@@ -232,13 +277,29 @@ export function createClaudeLauncher(
       await connectRunning();
       return;
     }
-    const launch = await prepareClaudeCommand(context, bridge, storagePath, resume);
-    await vscode.env.clipboard.writeText(`cd ${quotePosix(bridge.descriptor.workspaceRoot)} && ${launch}`);
+    await copy(resume);
     void vscode.window.showInformationMessage('Befehl kopiert. Im Shell-Prompt ausführen; laufendes Claude vorher mit /exit beenden.');
   });
+  const connect = (choice: ClaudeChoice): Promise<string | undefined> => exclusive(async () => {
+    switch (choice.how) {
+      case 'show': {
+        const current = liveTerminal();
+        if (current === undefined) throw new Error('The review terminal is closed. Start or resume a conversation.');
+        current.show();
+        return undefined;
+      }
+      case 'new': await launch(false); return undefined;
+      case 'resume': await launch(choice.session ?? true); return undefined;
+      case 'running': await prepareRunning(); return undefined;
+      case 'copy': await copy(false); return copiedNotice;
+    }
+  });
   return {
-    start, copyCommand, connectRunning: guarded(connectRunning),
-    dispose: () => { closed.dispose(); ended.dispose(); },
+    start, copyCommand, connectRunning: guarded(connectRunning), connect,
+    get hasTerminal() { return liveTerminal() !== undefined; },
+    onDidChange: changed.event,
+    conversations: () => listClaudeConversations(bridge.descriptor.workspaceRoot),
+    dispose: () => { closed.dispose(); ended.dispose(); changed.dispose(); },
   };
 }
 
@@ -248,13 +309,14 @@ export function registerClaudeLauncher(
   bridge: ReviewBridge,
   storagePath: string,
   pick: () => ClaudeLauncher | undefined = () => undefined,
-): vscode.Disposable {
+): vscode.Disposable & { readonly local: ClaudeLauncher } {
   const local = createClaudeLauncher(context, bridge, storagePath);
   const target = (): ClaudeLauncher => pick() ?? local;
-  return vscode.Disposable.from(
+  const registrations = vscode.Disposable.from(
     local,
     vscode.commands.registerCommand('pairReview.startClaude', () => target().start()),
     vscode.commands.registerCommand('pairReview.copyClaudeCommand', () => target().copyCommand()),
     vscode.commands.registerCommand('pairReview.connectRunningClaude', () => target().connectRunning()),
   );
+  return { local, dispose: () => { registrations.dispose(); } };
 }

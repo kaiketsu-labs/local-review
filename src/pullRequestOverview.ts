@@ -22,11 +22,16 @@ import type { Analysis } from './prAnalysis.js';
 import { conflictFixLabel, type LocalCommit } from './conflicts.js';
 import { publishableText } from './pullRequestComments.js';
 import type { MediaPreview } from './media.js';
+import type { ClaudeConversation } from './claudeSessions.js';
+import type { ClaudeChoice } from './setup.js';
+import { isSessionId } from './sessionBinding.js';
 
 /** Everything the review page shows for one PR, apart from the diff itself. */
 export interface OverviewState {
   /** Set on the local review page: the workspace's own uncommitted changes, without GitHub. */
   readonly local?: true;
+  /** On a local review page: your open PR from this branch, which the page can turn into. */
+  readonly branchPullRequest?: { readonly number: number; readonly title: string };
   /** `#number title`, for the editor tab; the page shows `heading` beside a copyable number. */
   readonly title: string;
   readonly number?: number;
@@ -44,7 +49,11 @@ export interface OverviewState {
   /** Line ranges marked read, collapsed in the diff. */
   readonly read: readonly ReadRange[];
   /** Claude's status; `fixingConflicts` is the current step while Claude fixes merge conflicts. */
-  readonly claude: { readonly text: string; readonly running: boolean; readonly retry: boolean; readonly fixingConflicts?: string; readonly progress?: ClaudeProgress };
+  readonly claude: {
+    readonly text: string; readonly running: boolean; readonly retry: boolean; readonly fixingConflicts?: string; readonly progress?: ClaudeProgress;
+    /** The connected conversation's link, on pages whose comments go to a conversation you connect: whether it receives comments, and whether its review terminal is open. */
+    readonly link?: { readonly delivering: boolean; readonly terminal: boolean };
+  };
   readonly threads: readonly {
     readonly id: string;
     readonly location: string;
@@ -206,6 +215,12 @@ export interface OverviewActions {
   openInEditor(path: string): Promise<void>;
   /** Stop showing an unchanged file that was opened on the page; local review only. */
   closeFile?(path: string): Promise<void>;
+  /** Turn a local review page into the review page of its branch's PR, in the same tab. */
+  openPullRequest?(): Promise<void>;
+  /** Recent conversations of the page's folder, to resume one; only where you connect Claude yourself. */
+  claudeConversations?(): Promise<readonly ClaudeConversation[]>;
+  /** Connect Claude as the page's Claude menu chose; returns a notice for the page. */
+  connectClaude?(choice: ClaudeChoice): Promise<string | undefined>;
   /** Open the PR's Claude conversation in a VS Code terminal. */
   openTerminal(): Promise<void>;
   /** Push the worktree's commits to the PR's branch. */
@@ -284,7 +299,7 @@ type PageRange = { readonly path: string; readonly side: DiffSide; readonly star
 
 /** What the page sends. The extension still validates each message, since the page renders untrusted HTML. */
 export type PageMessage =
-  | { readonly action: 'ready' | 'terminal' | 'push' | 'retry' | 'refresh' | 'pr' | 'analyze' | 'analysis-stop' | 'remove-worktree' }
+  | { readonly action: 'ready' | 'terminal' | 'push' | 'retry' | 'refresh' | 'pr' | 'analyze' | 'analysis-stop' | 'remove-worktree' | 'open-pr' }
   | { readonly action: 'publish' | 'github' | 'thread'; readonly id: string }
   | { readonly action: 'context' | 'preview' | 'media' | 'editor' | 'close-file'; readonly path: string }
   | (PageRange & { readonly action: 'comment'; readonly form: string; readonly text: string; readonly intent: CommentIntent })
@@ -326,7 +341,9 @@ export type PageMessage =
   | { readonly action: 'commit-suggestions'; readonly picked: readonly PickedSuggestion[] }
   | { readonly action: 'fix-conflicts'; readonly text: string }
   | { readonly action: 'edit-body'; readonly body: string }
-  | { readonly action: 'picker-options' }
+  | { readonly action: 'picker-options' | 'claude-conversations' }
+  | ({ readonly action: 'connect-claude' } & ClaudeChoice)
+  | { readonly action: 'copy-connect'; readonly command: 'reload' | 'connect' }
   | ({ readonly action: 'pick'; readonly what: PickTarget } & PickedSelection)
   | { readonly action: 'draft'; readonly draft: boolean };
 
@@ -344,8 +361,6 @@ export interface ExtensionMessage {
   /** GitHub's rendering of a form's text, for its Preview tab. */
   readonly markdown?: { readonly form: string; readonly html: string };
   readonly reveal?: string | undefined;
-  /** Lines to open a new comment on, after scrolling to their file. */
-  readonly compose?: PageRange | undefined;
   /** A guide step's key: show the guided layout at that step. */
   readonly revealStep?: string | undefined;
   /** A guide group's key: show the guided layout at that section. */
@@ -368,6 +383,10 @@ export interface ExtensionMessage {
   readonly pickerError?: string;
   readonly branches?: readonly string[];
   readonly branchesError?: string;
+  readonly conversations?: readonly ClaudeConversation[];
+  readonly conversationsError?: string;
+  /** A running Claude can now connect itself with `/pair-review:connect`. */
+  readonly runningReady?: true;
 }
 
 const reviewEvents: readonly ReviewEvent[] =['approve', 'requestChanges', 'comment'];
@@ -387,6 +406,15 @@ const commentKinds: readonly unknown[] = ['issue', 'review', 'reviewComment'] sa
 const isOid = (value: unknown): value is string => typeof value === 'string' && /^[a-f\d]{40,64}$/u.test(value);
 const isOptionalText = (value: unknown): value is string | undefined => value === undefined || (typeof value === 'string' && value.length <= maximumReviewLength);
 
+/** A Claude menu choice the page sent; a resumed conversation must be a session ID. */
+function parseClaudeChoice(value: unknown): ClaudeChoice | undefined {
+  const { how, session } = value as Record<string, unknown>;
+  if (how === 'show' || how === 'new' || how === 'running' || how === 'copy') return { how };
+  if (how !== 'resume') return undefined;
+  if (session === undefined) return { how };
+  return isSessionId(session) ? { how, session } : undefined;
+}
+
 /** A range the page asked for, checked against the PR's own commits. */
 function parseRange(value: unknown, commits: readonly string[]): DiffRange | undefined {
   if (typeof value !== 'object' || value === null) return undefined;
@@ -395,24 +423,28 @@ function parseRange(value: unknown, commits: readonly string[]): DiffRange | und
   return kind === 'commits' && isOid(from) && isOid(to) && commits.includes(from) && commits.includes(to) ? { kind, from, to } : undefined;
 }
 /** Open review pages by key; `sendFiles` reads the files again and then shows `reveal`. */
-const panels = new Map<string, { readonly panel: vscode.WebviewPanel; readonly sendFiles: (reveal?: OverviewReveal) => void }>();
+const panels = new Map<string, { readonly panel: vscode.WebviewPanel; readonly sendFiles: (reveal?: OverviewReveal) => void; readonly detach: () => vscode.WebviewPanel }>();
 
 const isLine = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
 const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= maximumReviewLength;
 
-/** Where the review page scrolls when it opens: a file, a step of the guided review, or lines of a file to comment on. `reload` reads the files first, for a file the page may not show yet. */
-export type OverviewReveal = { readonly path: string; readonly reload?: true } | { readonly step: string } | { readonly group: string } | { readonly compose: PageRange };
+/** Where the review page scrolls when it opens: a file or a step of the guided review. `reload` reads the files first, for a file the page may not show yet. */
+export type OverviewReveal = { readonly path: string; readonly reload?: true } | { readonly step: string } | { readonly group: string };
 
 const revealMessage = (reveal: OverviewReveal | undefined): ExtensionMessage => reveal === undefined ? {}
-  : 'path' in reveal ? { reveal: reveal.path } : 'step' in reveal ? { revealStep: reveal.step } : 'group' in reveal ? { revealGroup: reveal.group }
-    : { reveal: reveal.compose.path, compose: reveal.compose };
+  : 'path' in reveal ? { reveal: reveal.path } : 'step' in reveal ? { revealStep: reveal.step } : { revealGroup: reveal.group };
 
-/** Show a review page if it is open; a reveal with lines to comment on reads the files again first, since they may not be on the page yet. */
+/** Whether a review page is open. */
+export function isPageOpen(key: string): boolean {
+  return panels.has(key);
+}
+
+/** Show a review page if it is open; a reveal with `reload` reads the files again first, since the file may not be on the page yet. */
 export function revealOpenPage(key: string, reveal?: OverviewReveal): boolean {
   const page = panels.get(key);
   if (page === undefined) return false;
   page.panel.reveal();
-  if (reveal !== undefined && ('compose' in reveal || ('path' in reveal && reveal.reload === true))) page.sendFiles(reveal);
+  if (reveal !== undefined && 'path' in reveal && reveal.reload === true) page.sendFiles(reveal);
   else if (reveal !== undefined) void page.panel.webview.postMessage(revealMessage(reveal)).then(undefined, () => undefined);
   return true;
 }
@@ -424,11 +456,15 @@ export function revealOpenPage(key: string, reveal?: OverviewReveal): boolean {
 export async function showPullRequestOverview(
   key: string, read: () => Promise<OverviewState>, onDidChange: vscode.Event<unknown>, actions: OverviewActions, extensionUri: vscode.Uri, revealAt?: OverviewReveal,
   onDidChangeFiles?: vscode.Event<unknown>,
+  /** An open page whose tab this page takes over, such as the local review of the checkout a PR is open on. */
+  adopt?: string,
 ): Promise<void> {
   if (revealOpenPage(key, revealAt)) return;
   let reveal = revealAt;
   let state = await read();
-  const panel = vscode.window.createWebviewPanel('pairReview.pullRequestOverview', state.title, vscode.ViewColumn.Active,
+  const adopted = adopt === undefined ? undefined : panels.get(adopt)?.detach();
+  if (adopted !== undefined) adopted.title = state.title;
+  const panel = adopted ?? vscode.window.createWebviewPanel('pairReview.pullRequestOverview', state.title, vscode.ViewColumn.Active,
     { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources'), vscode.Uri.joinPath(extensionUri, 'dist')], retainContextWhenHidden: true });
   const resource = (...parts: string[]): string => panel.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, ...parts)).toString();
   panel.webview.html = overviewHtml(state, resource('dist', 'overview.js'), resource('dist', 'pdf.js'));
@@ -441,7 +477,7 @@ export async function showPullRequestOverview(
       post({ filesError: error instanceof Error ? error.message : String(error) });
     });
   };
-  panels.set(key, { panel, sendFiles: (next) => { reveal = next; sendFiles(); } });
+  panels.set(key, { panel, sendFiles: (next) => { reveal = next; sendFiles(); }, detach: () => { release(); disposed.dispose(); return panel; } });
   const conversation = (): PullRequestConversation | undefined => state.conversation;
   /** A comment on this page the viewer may change in the way `may` names, found in the conversation or a GitHub thread. */
   const findComment = (id: unknown, may: 'canEdit' | 'canDelete' | 'canHide' | 'canReact'): boolean => typeof id === 'string'
@@ -476,7 +512,7 @@ export async function showPullRequestOverview(
     panel.webview.onDidReceiveMessage(async (value: unknown) => {
       if (typeof value !== 'object' || value === null) return;
       const { action, id, ids, event, body, method, what, values, teams, draft, path, viewed, side, startLine, endLine, text, intent, resolved, pending, form, peek, line, column, view, extension, message, option,
-        range, whitespace, kind, hide, reason, content, on, login, run, headline, picked, branch, oid, title, deleteBranch } = value as Record<string, unknown>;
+        range, whitespace, kind, hide, reason, content, on, login, run, headline, picked, branch, oid, title, deleteBranch, command } = value as Record<string, unknown>;
       const formKey = typeof form === 'string' && form.length <= 200 ? form : undefined;
       try {
         if (action === 'ready') sendFiles();
@@ -572,6 +608,21 @@ export async function showPullRequestOverview(
         else if (action === 'picker-options') {
           try { post({ pickerOptions: await actions.pickerOptions() }); } catch (error: unknown) { post({ pickerError: error instanceof Error ? error.message : String(error) }); }
         }
+        else if (action === 'claude-conversations' && actions.claudeConversations !== undefined) {
+          try { post({ conversations: await actions.claudeConversations() }); } catch (error: unknown) { post({ conversationsError: error instanceof Error ? error.message : String(error) }); }
+        }
+        else if (action === 'connect-claude' && actions.connectClaude !== undefined) {
+          const choice = parseClaudeChoice(value);
+          if (choice !== undefined) {
+            const notice = await actions.connectClaude(choice);
+            if (choice.how === 'running') post({ runningReady: true });
+            if (notice !== undefined) post({ notice: { text: notice } });
+          }
+        }
+        else if (action === 'copy-connect' && (command === 'reload' || command === 'connect')) {
+          await vscode.env.clipboard.writeText(command === 'reload' ? '/reload-plugins --force' : '/pair-review:connect');
+        }
+        else if (action === 'open-pr' && actions.openPullRequest !== undefined) await actions.openPullRequest();
         else if (action === 'terminal') await actions.openTerminal();
         else if (action === 'push') await actions.push();
         else if (action === 'retry') actions.retry();
@@ -678,11 +729,12 @@ export async function showPullRequestOverview(
   subscriptions.push(sync, panel.onDidChangeViewState(({ webviewPanel }) => { if (webviewPanel.visible) sync.now(); }));
   if (onDidChangeFiles !== undefined) subscriptions.push(onDidChangeFiles(() => { sendFiles(); }));
   sync.now();
-  panel.onDidDispose(() => {
+  const release = (): void => {
     if (timer !== undefined) clearTimeout(timer);
     for (const subscription of subscriptions) subscription.dispose();
     panels.delete(key);
-  });
+  };
+  const disposed = panel.onDidDispose(release);
 }
 
 /** The review page: PR overview on top, every changed file below. `script` (src/webview/overview.ts) draws it from state and file messages. */
@@ -742,11 +794,12 @@ section:has(>.picker){position:relative}.picker{position:absolute;top:28px;left:
 #error{position:fixed;left:var(--space-24);right:var(--space-24);bottom:var(--space-16);z-index:5;max-width:520px;margin:0;padding:var(--space-8) var(--space-12);border:1px solid var(--danger);border-radius:var(--radius-lg);color:var(--ink);background:linear-gradient(var(--danger-soft),var(--danger-soft)),var(--surface-raised);box-shadow:var(--shadow-overlay);white-space:pre-wrap;cursor:pointer}#error:empty{display:none}
 #files-bar{position:sticky;top:0;z-index:2;margin-top:var(--space-24);padding:var(--space-8) 0;background:var(--surface)}
 #files-bar h2 .muted{font-weight:400}
-.view-head{gap:var(--space-12);min-width:0;max-width:100%}.tabs{display:flex;gap:var(--space-4);min-width:0;max-width:100%;overflow-x:auto;scrollbar-width:thin}
+#files-bar .view-head{flex:1 1 0;flex-wrap:nowrap;min-width:min(320px,100%)}#files-bar .toolbar{flex:0 1 auto}#files-title{flex:none;white-space:nowrap}
+.view-head{gap:var(--space-12);min-width:0;max-width:100%}.tabs{display:flex;gap:var(--space-4);min-width:0;max-width:100%}.file-tabs{display:flex;gap:var(--space-4);min-width:0;overflow-x:auto;scrollbar-width:thin}.file-tabs:empty{display:none}
 .tabs button{display:inline-flex;align-items:center;gap:var(--space-6);min-height:28px;padding:0 var(--space-8);border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--ink-muted);background:none;font-size:14px;font-weight:600}
 .tabs button:hover{color:var(--ink);filter:none}.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ink)}
 .tabs svg{width:16px;height:16px;fill:currentColor}
-.tabs>*{flex:none;white-space:nowrap}.file-tab{display:inline-flex;align-items:center;padding-left:var(--space-4);border-left:1px solid var(--line)}.file-icon{display:inline-block;width:16px;font-size:14px;font-weight:400;line-height:1;text-align:center}img.file-icon{height:16px}.file-tab .tab-close{min-height:20px;padding:0 var(--space-4);border-bottom:0;font-weight:400}.file-tab .tab-close svg{width:12px;height:12px}
+.tabs>*{flex:none;white-space:nowrap}.tabs>.file-tabs{flex:0 1 auto}.file-tab{display:inline-flex;flex:none;align-items:center;padding-left:var(--space-4);border-left:1px solid var(--line);white-space:nowrap}.file-tab>button[role=tab]{gap:var(--space-4);min-height:24px;padding:0 var(--space-6);font-size:13px;font-weight:400}.file-tab>button[aria-selected=true]{font-weight:600}.file-tab .file-icon{width:14px;font-size:13px}.file-tab img.file-icon{height:14px}.file-icon{display:inline-block;width:16px;font-size:14px;font-weight:400;line-height:1;text-align:center}img.file-icon{height:16px}.file-tab .tab-close{min-height:20px;padding:0 var(--space-4);border-bottom:0;font-weight:400}.file-tab .tab-close svg{width:12px;height:12px}
 .tabs .count{min-width:18px;height:18px;padding:0 var(--space-6);border-radius:var(--radius-pill);font-size:11px;font-weight:600;line-height:18px;text-align:center;color:var(--ink);background:color-mix(in srgb,var(--ink) 12%,transparent)}.tabs .count:empty:not(.working){display:none}
 .tabs .count.working{min-width:0;padding:0;background:var(--claude)}
 ${clawdLoaderStyles()}
@@ -885,6 +938,7 @@ details.thread .composer-actions button{min-height:24px;padding:0 10px;font-size
 .toolbar button.icon-button[aria-pressed=true]{color:var(--ink);background:color-mix(in srgb,var(--ink) 12%,transparent)}
 .filter-box{position:relative}#file-filter{width:150px;height:24px;padding:0 var(--space-24) 0 var(--space-8);font-size:12px}#filter-clear{position:absolute;top:2px;right:2px;width:20px;height:20px;min-height:20px}#filter-clear svg{width:14px;height:14px}
 .toolbar{flex-wrap:wrap;justify-content:flex-end}#files-bar .toolbar{gap:var(--space-8)}#files-bar .toolbar .divider{margin:0 var(--space-2)}.menu-anchor{position:relative;display:inline-flex}.toolbar-menu{top:calc(100% + var(--space-4));left:auto;right:0;width:max-content;min-width:180px;max-width:420px}.toolbar-menu .picker-row .text{display:flex;gap:var(--space-8);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toolbar-menu .picker-row .text .muted{margin-left:auto}.toolbar-menu code{font-family:var(--font-code);color:var(--ink-muted)}.base-menu .picker-row .text{display:block}.base-menu{left:0;right:auto;width:300px;max-width:none}.base-menu .picker-list{gap:var(--space-2)}.base-menu input[type=text]{position:sticky;top:0;z-index:1;flex:none;width:100%;height:26px;margin-bottom:var(--space-4);padding:0 var(--space-8);font-size:12px}.menu-foot{display:flex;justify-content:flex-end;padding-top:var(--space-4);border-top:1px solid var(--line)}
+.connect-menu{left:0;right:auto;width:400px;max-width:none}.connect-menu .picker-row .label{min-width:0;overflow:hidden;text-overflow:ellipsis}.connect-menu .picker-row .muted{flex:none}.connect-command{gap:var(--space-8);padding:var(--space-4) var(--space-6)}.connect-command code{font-family:var(--font-code);font-size:12px;color:var(--ink)}
 .range-menu{left:0;right:auto;width:min(680px,90vw);max-width:none}.range-menu .picker-list{display:grid;grid-template-columns:16px max-content minmax(0,1fr) repeat(6,max-content);column-gap:var(--space-8)}.range-menu .range-row{display:grid;grid-column:1/-1;grid-template-columns:subgrid}.range-row:not(.commit)>.text{grid-column:2/8}.range-row:not(.commit)>.muted{grid-column:8/-1;text-align:right}.range-row .num{text-align:right;font-variant-numeric:tabular-nums}.range-row .ok.num,.range-row .bad.num{font-family:var(--font-code);font-size:11px}.range-row .when{text-align:right}.menu-hint{grid-column:1/-1}.range-row{width:100%;justify-content:flex-start;min-height:28px;padding:0 var(--space-6);border:0;color:var(--ink);background:none;font:inherit;font-size:12px;text-align:left}.range-row:focus-visible{outline:1px solid var(--focus);outline-offset:-1px}.range-row[aria-checked=true] .check{visibility:visible}.range-row .text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.range-row .ref{display:inline-flex;align-items:center;flex:none}.range-row .when{flex:none;color:var(--ink-muted)}.range-row .muted{flex:none}.menu-hint{margin-top:var(--space-4);padding:var(--space-6) var(--space-6) var(--space-2);border-top:1px solid var(--line);font-size:11px}
 .range-button{gap:var(--space-6);min-height:26px;height:26px;max-width:340px;padding:0 var(--space-4) 0 var(--space-8);border:1px solid var(--line);color:var(--ink);background:none;font-size:12px}.range-button:hover{filter:none;background:color-mix(in srgb,var(--ink) 6%,transparent)}.range-button[aria-expanded=true]{border-color:var(--line-strong);background:color-mix(in srgb,var(--ink) 6%,transparent)}.range-button>svg{color:var(--ink-muted)}.range-button .ref{display:inline-flex;align-items:center;height:18px;min-height:18px}.range-button .range-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.range-button.on{color:var(--brand);background:var(--brand-soft)}
 .range-note{flex-wrap:nowrap;align-items:center;gap:var(--space-12);margin-top:var(--space-12);padding:var(--space-8) var(--space-12);border:1px solid var(--line);border-radius:var(--radius-md);font-size:12px;line-height:20px;background:color-mix(in srgb,var(--ink) 4%,transparent)}.range-note>svg{flex:none;width:16px;height:16px;fill:var(--ink-muted)}.range-note .gap{flex:1;min-width:0}.range-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}.range-title{display:flex;align-items:center;gap:var(--space-6);font-weight:600}.range-title .headline{min-width:0;overflow:hidden;text-overflow:ellipsis}.range-title .ok,.range-title .bad,.range-title .wait{flex:none;font-weight:400}.range-title .ref{flex:none;font-weight:400}.range-facts b{color:var(--ink);font-weight:600}.range-note>button{flex:none}
@@ -918,12 +972,12 @@ tr.annotation td{padding:var(--space-4) 10px}.annotation-box{display:flex;gap:va
 .annotation-box.failure{--level:var(--danger)}.annotation-box.warning{--level:var(--warning)}.annotation-box.notice{--level:var(--github)}
 .suggest-row{margin-top:var(--space-6);gap:var(--space-6)}.suggest-row button{min-height:22px;padding:0 var(--space-8);font-size:12px}
 
-.byline .icon-button{width:20px;height:20px;min-height:20px}
+.byline .icon-button{width:20px;height:20px;min-height:20px}.byline .pr-chip{gap:var(--space-4);min-height:22px;height:22px;margin-left:var(--space-4)}.pr-chip svg{width:14px;height:14px;fill:currentColor}
 </style></head><body${state.local ? ' class="local"' : ''}>
 <div class="row head"><span class="title-row"><span id="number"></span><h1 id="title"></h1><button id="edit-title" class="icon-button" data-pr-action data-tip="Edit title" aria-label="Edit title" hidden>${codicons.edit}</button></span><span class="toolbar"><button id="pr" class="icon-button pr-only" data-tip="Open on GitHub" aria-label="Open on GitHub">${codicons.github}</button><button id="refresh" class="icon-button" data-tip="Refresh" aria-label="Refresh">${codicons.refresh}</button><span class="menu-anchor pr-only"><button id="remove-worktree" class="icon-button" data-tip="Remove worktree" aria-label="Remove worktree" aria-haspopup="true" aria-expanded="false">${codicons.trash}</button></span></span></div>
 <div class="row byline"><span id="byline" class="row muted"></span><span id="verdict" class="verdict" hidden></span></div>
 <div id="facts" class="muted facts pr-only"></div>
-<div class="row status"><div class="progress" id="reviewed"></div><span id="claude"></span><button id="terminal" class="quiet" data-tip="Continue this PR's Claude conversation in a terminal">Open in terminal</button><button id="retry" class="small">Retry</button></div>
+<div class="row status"><div class="progress" id="reviewed"></div><span id="claude"></span><button id="terminal" class="quiet" data-tip="Continue this PR's Claude conversation in a terminal">Open in terminal</button><span class="menu-anchor" hidden><button id="connect" class="range-button" aria-haspopup="true" aria-expanded="false"></button></span><button id="retry" class="small">Retry</button></div>
 <p id="error" role="alert"></p>
 <p id="notice" role="status"></p>
 <aside id="peek" hidden aria-label="Definition"><div id="peek-resize" title="Drag to resize. Double-click to reset."></div><div class="peek-head">
@@ -957,7 +1011,7 @@ tr.annotation td{padding:var(--space-4) 10px}.annotation-box{display:flex;gap:va
 </div>
 <div id="files-bar" class="row head"><span class="row view-head"><span class="tabs" role="tablist" aria-label="Show">
 <button id="view-files" role="tab">${state.local ? 'Changes' : 'Files'}<span id="files-count" class="count"></span></button>
-<button id="view-guide" class="pr-only" role="tab">${codicons.map}Guide<span id="guide-count" class="count" hidden></span></button></span>
+<button id="view-guide" class="pr-only" role="tab">${codicons.map}Guide<span id="guide-count" class="count" hidden></span></button><span id="file-tabs" class="file-tabs"></span></span>
 <span class="menu-anchor pr-only"><button id="range" class="range-button" aria-label="Changes from" aria-haspopup="true" aria-expanded="false">${codicons.gitCommit}<span class="range-text">All changes</span>${codicons.chevronDown}</button></span>
 <span id="files-title" class="muted"></span></span><span class="toolbar">
 <span id="analysis-status" class="pr-only"></span><button id="analyze" class="small pr-only">Build guide</button>

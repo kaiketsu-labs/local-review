@@ -3,10 +3,10 @@ import { join } from 'node:path';
 import * as vscode from 'vscode';
 import { createReviewBridge } from './bridge.js';
 import { readCustomInstructions, type InstructionKind } from './customInstructions.js';
-import type { CodeAnchor, ReviewBridge } from './contracts.js';
+import type { CodeAnchor, ReviewBridge, ReviewStore } from './contracts.js';
 import { parsePullRequestFileUri, pullRequestFileUri } from './pullRequestDiff.js';
 import { type CommentPlacement, placeComment, publishableText, readClaudeCommits, readGitHubLinks, readPublications, writeClaudeCommits, writeGitHubLinks, writePublications } from './pullRequestComments.js';
-import type { PullRequestProvider } from './pullRequests.js';
+import type { PullRequestProvider, PullRequestSummary } from './pullRequests.js';
 import { showPublishPanel } from './publishPanel.js';
 import type { ReviewSession, ReviewSessionSource } from './reviewSession.js';
 import { ClaudeRunner, type ClaudeRunnerOptions } from './claudeRunner.js';
@@ -15,7 +15,7 @@ import { PullRequestAnalysis } from './prAnalysisRunner.js';
 import { requireNodeRuntime, resolveExecutable } from './executables.js';
 import { prepareConnection } from './setup.js';
 import { createReviewStore } from './store.js';
-import { listWorktrees, migrateWorktrees, readPullRequestBase, readWorktree, reviewDataPath, worktreePath } from './worktrees.js';
+import { listWorktrees, migrateWorktrees, type PullRequestWorktree, readPullRequestBase, readWorktree, reviewDataPath, worktreePath } from './worktrees.js';
 
 /** A PR's review: its comments, the bridge Claude replies through, and the background Claude that answers them. */
 export interface PullRequestSession {
@@ -28,6 +28,8 @@ export interface PullRequestSession {
   readonly output: vscode.OutputChannel;
   /** Commits Claude made while answering a local thread, oldest first. */
   readonly commits: (threadId: string) => readonly WorktreeCommit[];
+  /** False when the PR is open on a checkout whose own review keeps the bridge, and a connected conversation answers. */
+  readonly ownsBridge: boolean;
 }
 
 /** Review sessions for the PR worktrees of one checkout, opened on demand and restored on startup. */
@@ -41,6 +43,8 @@ export class PullRequestSessions implements ReviewSessionSource, vscode.Disposab
   readonly #watchers = new Map<string, vscode.Disposable>();
   readonly #open = new Map<string, Promise<PullRequestSession>>();
   readonly #ready = new Map<string, PullRequestSession>();
+  /** Your own PRs opened on checkouts that have their own review, by PR and folder. */
+  readonly #onCheckouts = new Map<string, Promise<PullRequestSession>>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -119,6 +123,8 @@ export class PullRequestSessions implements ReviewSessionSource, vscode.Disposab
 
   dispose(): void {
     for (const session of this.#ready.values()) release(session);
+    for (const pending of this.#onCheckouts.values()) void pending.then(release, () => undefined);
+    this.#onCheckouts.clear();
     for (const watcher of this.#watchers.values()) watcher.dispose();
     this.#watchers.clear();
     this.#ready.clear();
@@ -130,6 +136,27 @@ export class PullRequestSessions implements ReviewSessionSource, vscode.Disposab
   /** Flush every PR's comments before the extension unloads. */
   async flush(): Promise<void> {
     await Promise.all([...this.#ready.values()].map(({ session }) => session.store.flush()));
+  }
+
+  /**
+   * Open your own PR on a checkout that already has a review, such as the folder you work in.
+   * Its comments stay in that review and reach the conversation you connected; the session's own Claude only builds the guide.
+   */
+  async openOnCheckout(repository: string, pullRequest: PullRequestSummary, checkout: { readonly root: string; readonly store: ReviewStore; readonly bridge: ReviewBridge; readonly dataPath: string }): Promise<PullRequestSession> {
+    const id = `${key(repository, pullRequest.number)}@${checkout.root}`;
+    let pending = this.#onCheckouts.get(id);
+    if (pending === undefined) {
+      const dataPath = checkoutDataPath(checkout.dataPath, repository, pullRequest.number);
+      pending = mkdir(dataPath, { recursive: true, mode: 0o700 }).then(() => this.#build(repository, pullRequest.number, checkout.root,
+        { version: 1, repository, role: 'author', pullRequest }, { store: checkout.store, bridge: checkout.bridge, dataPath, ownsBridge: false }));
+      this.#onCheckouts.set(id, pending);
+      const opening = pending;
+      opening.then((session) => {
+        const fire = (): void => { this.#stateChanged.fire(session); };
+        this.#watchers.set(id, vscode.Disposable.from(session.session.store.onChange(fire), session.analysis.onDidChange(fire)));
+      }, () => { if (this.#onCheckouts.get(id) === opening) this.#onCheckouts.delete(id); });
+    }
+    return pending;
   }
 
   async #create(repository: string, number: number): Promise<PullRequestSession> {
@@ -146,6 +173,12 @@ export class PullRequestSessions implements ReviewSessionSource, vscode.Disposab
       bridge.dispose();
       throw error;
     }
+    return this.#build(repository, number, worktree, metadata, { store, bridge, dataPath, ownsBridge: true });
+  }
+
+  /** A PR session over `worktree`; with a bridge it does not own, a connected conversation answers and the bridge outlives the session. */
+  async #build(repository: string, number: number, worktree: string, metadata: PullRequestWorktree,
+    { store, bridge, dataPath, ownsBridge }: { readonly store: ReviewStore; readonly bridge: ReviewBridge; readonly dataPath: string; readonly ownsBridge: boolean }): Promise<PullRequestSession> {
     const publications = await readPublications(dataPath);
     const links = await readGitHubLinks(dataPath);
     const commits = await readClaudeCommits(dataPath);
@@ -193,6 +226,7 @@ export class PullRequestSessions implements ReviewSessionSource, vscode.Disposab
         await writeClaudeCommits(dataPath, commits);
       },
       ...this.claude,
+      ...ownsBridge ? {} : { answersElsewhere: true },
     });
     const analysis = new PullRequestAnalysis({ store, cwd: worktree, dataPath, role: metadata.role, log, resolve, instructions: instructions('guide'), ...this.claude });
     const record = async (threadId: string, url: string, pending: boolean): Promise<void> => {
@@ -280,9 +314,14 @@ export class PullRequestSessions implements ReviewSessionSource, vscode.Disposab
       },
       linkedGitHubThread: (threadId) => links.get(threadId)?.id,
     };
-    const result: PullRequestSession = { session, bridge, runner, analysis, output, commits: (threadId) => commits.get(threadId) ?? [] };
+    const result: PullRequestSession = { session, bridge, runner, analysis, output, commits: (threadId) => commits.get(threadId) ?? [], ownsBridge };
     return result;
   }
+}
+
+/** Where a PR open on a checkout keeps its publications, links and review marks, inside that checkout's review folder. */
+export function checkoutDataPath(reviewFolder: string, repository: string, number: number): string {
+  return join(reviewFolder, 'pull-requests', `${repository.replace('/', '__')}-${number}`);
 }
 
 /** Such as "12" or "12–14". */
@@ -291,10 +330,10 @@ function lineLabel({ startLine, endLine }: CodeAnchor): string {
 }
 
 /** Stop a PR's Claude and its connection. */
-function release({ runner, analysis, bridge, output }: PullRequestSession): void {
+function release({ runner, analysis, bridge, output, ownsBridge }: PullRequestSession): void {
   runner.dispose();
   analysis.dispose();
-  bridge.dispose();
+  if (ownsBridge) bridge.dispose();
   output.dispose();
 }
 

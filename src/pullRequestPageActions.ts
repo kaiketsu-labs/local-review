@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { commitAndPush, commitFiles, syncKeepingLocalCommits } from './conflicts.js';
+import { commitAndPush, commitFiles, fetchPullRequestHead, syncKeepingLocalCommits } from './conflicts.js';
 import type { OverviewActions, PickedSuggestion } from './pullRequestOverview.js';
 import type { PullRequestConversation, PullRequestDetails, PullRequestProvider, RemoteThread } from './pullRequests.js';
 import { applyLineSuggestions, parseSuggestions, type LineSuggestion } from './suggestions.js';
@@ -12,8 +12,10 @@ export interface PageContext {
   readonly number: number;
   readonly headBranch: string;
   readonly baseBranch: () => string;
-  /** The PR's worktree. */
+  /** The PR's worktree, or your own checkout. */
   readonly folder: string;
+  /** Set for your own checkout: suggestions become local commits, and the checkout never moves to GitHub's head. */
+  readonly keepCheckout?: boolean;
   /** Skip Git hooks when committing, for someone else's PR. */
   readonly hooksOff: boolean;
   details(): Promise<PullRequestDetails>;
@@ -126,7 +128,8 @@ export function githubPageActions(context: PageContext): GitHubPageActions {
       const edits = suggestionEdits(await context.threads(), picked);
       const paths = [...edits.keys()];
       if ((await git(context.folder, ['status', '--porcelain', '--', ...paths])).trim() !== '') throw new Error('Files these suggestions change have uncommitted changes. Commit or discard them first.');
-      const { head, ahead } = await syncKeepingLocalCommits(context.folder, number);
+      const { head, ahead } = context.keepCheckout === true ? { head: await fetchPullRequestHead(context.folder, number), ahead: true }
+        : await syncKeepingLocalCommits(context.folder, number);
       const moved = ahead ? (await git(context.folder, ['diff', '--name-only', head, 'HEAD', '--', ...paths])).trim() : '';
       if (moved) throw new Error(`Unpushed commits change ${moved.split('\n').join(', ')}, so the suggestion's lines may have moved. Push them first.`);
       const before = new Map<string, string>();

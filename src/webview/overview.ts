@@ -1,4 +1,5 @@
 import type { ClaudeStep } from '../claudeRunner.js';
+import type { ClaudeConversation } from '../claudeSessions.js';
 import type { DefinitionPeek } from '../definitions.js';
 import { buildGuide, groupReadMarks, stepViewed as isStepViewed, type GuideGroup, type GuideStep, type Severity } from '../prAnalysis.js';
 import type { DefinitionTarget, DiffRange, DiffSide, ExtensionMessage, FilePreview, GitHubMessageView, GitHubThreadView, OverviewState, PageMessage, PickedSuggestion, PickTarget } from '../pullRequestOverview.js';
@@ -39,6 +40,7 @@ interface Saved {
   readonly conversationDraft?: string;
   readonly conversationFolded?: boolean;
   readonly fileTab?: string | undefined;
+  readonly tabOrder?: readonly string[];
 }
 type Thread = (OverviewState['threads'][number] & { readonly source: 'local'; readonly pending?: never; readonly outdated?: never })
   | (GitHubThreadView & { readonly source: 'github' });
@@ -64,6 +66,8 @@ let view: View = saved.view === 'guide' || (saved.view === undefined && saved.la
 let fileTab = saved.fileTab;
 /** The file tab last scrolled into view, so redraws keep the tab row where the user scrolled it. */
 let scrolledTab: string | undefined;
+/** Paths of file tabs in the order they opened, so a new tab goes last instead of by name. */
+const tabOrder: string[] = [...saved.tabOrder ?? []];
 let fileIcons: FileIcons | undefined;
 /** CSS font families of the icon theme's fonts already added to the page, by font id. */
 const iconFonts = new Map<string, string>();
@@ -248,7 +252,8 @@ function frameMain(): void {
 
 function save(): void {
   api.setState({ layout, view, peekWidth, folders, collapsed: Object.fromEntries(collapsed), previewing: [...previewing], composer, replies: Object.fromEntries(replies), publishing: Object.fromEntries(publishing),
-    range: wantedRange ?? diffRange, whitespace, filter: fileFilter, hideViewed, hiddenTypes: [...hiddenTypes], conversationDraft, conversationFolded, fileTab });
+    range: wantedRange ?? diffRange, whitespace, filter: fileFilter, hideViewed, hiddenTypes: [...hiddenTypes], conversationDraft, conversationFolded, fileTab,
+    tabOrder });
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -294,6 +299,14 @@ function icon(svg: string): Element {
   const template = document.createElement('template');
   template.innerHTML = svg;
   return template.content.firstElementChild as Element;
+}
+
+/** Your open PR from the local page's branch; clicking turns this tab into its review page. */
+function pullRequestChip({ number, title }: NonNullable<OverviewState['branchPullRequest']>): HTMLButtonElement {
+  const chip = button('', () => post({ action: 'open-pr' }), 'small pr-chip');
+  chip.append(icon(codicons.gitPullRequest), 'PR #' + number);
+  chip.dataset.tip = 'Review #' + number + ' ' + title + ' in this tab';
+  return chip;
 }
 
 /** A branch name that copies itself, like GitHub's. */
@@ -514,7 +527,8 @@ function renderState(details: PullRequestDetails): void {
   $('mergeable').textContent = draft ? 'Mark it ready for review before merging.'
     : !details.open ? (details.merged ? '' : 'Closed without merging.')
     : details.mergeable === 'no' ? 'Has conflicts with the base branch.' : details.mergeable === 'unknown' ? 'GitHub is still checking for conflicts.' : '';
-  const conflicted = details.open && details.mergeable === 'no' && details.canEdit;
+  // On your own checkout, Claude fixes conflicts in the conversation you connected, so the page has no Fix conflicts button.
+  const conflicted = details.open && details.mergeable === 'no' && details.canEdit && current?.claude.link === undefined;
   const question = conflicted && current?.claude.running !== true ? current?.conflictQuestion : undefined;
   $('conflict-row').hidden = !conflicted || question !== undefined;
   $('conflict-ask').hidden = question === undefined;
@@ -1539,6 +1553,95 @@ function dismissForm(form: { readonly login: string; text: string }): HTMLElemen
   return item;
 }
 
+/** Which part of the Claude menu shows: the choices, conversations to resume, or the steps that connect a running Claude. */
+let connectView: 'choices' | 'resume' | 'preparing' | 'running' = 'choices';
+let conversations: readonly ClaudeConversation[] | string | undefined;
+
+/** The Claude button where you connect a conversation yourself; the terminal button is for a PR's own Claude. */
+function renderConnectButton(link: OverviewState['claude']['link']): void {
+  const connect = $('connect');
+  $('terminal').hidden = link !== undefined;
+  $('remove-worktree').closest('.menu-anchor')?.toggleAttribute('hidden', link !== undefined);
+  connect.parentElement?.toggleAttribute('hidden', link === undefined);
+  if (link === undefined) return;
+  const label = link.terminal ? 'Open in terminal' : link.delivering ? 'Switch conversation' : 'Connect Claude';
+  if (connect.dataset.label !== label) {
+    connect.dataset.label = label;
+    connect.replaceChildren(el('span', 'range-text', label), icon(codicons.chevronDown));
+  }
+  if (connectView === 'running' && link.delivering) {
+    connectView = 'choices';
+    if (toolbarMenu?.anchor === 'connect') closeToolbarMenu();
+    showNotice({ text: 'Claude connected.' });
+  } else if (connectView === 'choices') renderConnectMenu();
+}
+
+function openConnectMenu(): void {
+  connectView = 'choices';
+  openToolbarMenu('connect', [], 'connect-menu');
+  renderConnectMenu();
+  toolbarMenu?.node.querySelector<HTMLElement>('input')?.focus();
+}
+
+function renderConnectMenu(): void {
+  const list = toolbarMenu?.anchor === 'connect' ? toolbarMenu.node.querySelector('.picker-list') : null;
+  if (!list) return;
+  const link = current?.claude.link;
+  const choose = (how: 'show' | 'new' | 'copy' | 'resume', session?: string): void => {
+    closeToolbarMenu();
+    post(session === undefined ? { action: 'connect-claude', how } : { action: 'connect-claude', how: 'resume', session });
+  };
+  const choice = (label: string, note: string, pick: () => void): HTMLElement => menuRow([el('span', 'label', label), ...note ? [el('span', 'muted', note)] : []], false, (on) => { if (on) pick(); }, true);
+  if (connectView === 'choices') {
+    const switching = link?.terminal === true || link?.delivering === true;
+    list.replaceChildren(
+      ...link?.terminal ? [choice('Show terminal', '', () => choose('show')), el('div', 'muted picker-note', 'Switch conversation')] : [],
+      choice('New conversation', '', () => choose('new')),
+      choice('Resume a conversation…', '', () => {
+        connectView = 'resume';
+        conversations = undefined;
+        renderConnectMenu();
+        list.querySelector('input')?.focus();
+        post({ action: 'claude-conversations' });
+      }),
+      choice('Connect running Claude', '', () => {
+        connectView = 'preparing';
+        renderConnectMenu();
+        post({ action: 'connect-claude', how: 'running' });
+      }),
+      choice('Copy command', switching ? 'new conversation' : 'for another terminal', () => choose('copy')),
+    );
+  } else if (connectView === 'resume') {
+    let search = list.querySelector<HTMLInputElement>('input[type=text]');
+    if (!search) {
+      search = el('input');
+      search.type = 'text';
+      search.placeholder = 'Filter conversations';
+      search.setAttribute('aria-label', 'Filter conversations');
+      search.addEventListener('input', () => renderConnectMenu());
+    }
+    const query = search.value.trim().toLowerCase();
+    const found = typeof conversations === 'string' || conversations === undefined ? [] : conversations
+      .filter((conversation) => !query || (conversation.title + ' ' + conversation.branch).toLowerCase().includes(query));
+    const rows = found.map((conversation) => choice(conversation.title,
+      [conversation.running ? 'Running' : '', relativeTime(new Date(conversation.modifiedAt).toISOString()), conversation.branch].filter(Boolean).join(' · '),
+      () => choose('resume', conversation.id)));
+    const note = typeof conversations === 'string' ? 'Could not list conversations: ' + conversations : conversations === undefined ? 'Loading…' : found.length ? '' : query ? 'No matches.' : 'No conversations in this folder yet.';
+    list.replaceChildren(search, ...rows, ...note ? [el('div', 'muted picker-note', note)] : [], choice('All conversations in Claude…', '', () => choose('resume')));
+  } else if (connectView === 'preparing') {
+    list.replaceChildren(el('div', 'muted picker-note', 'Preparing Claude…'));
+  } else {
+    const command = (text: string, which: 'reload' | 'connect'): HTMLElement => {
+      const row = el('div', 'row connect-command');
+      const copy = button('Copy', () => { post({ action: 'copy-connect', command: which }); copy.textContent = 'Copied'; }, 'small');
+      row.append(el('code', 'gap', text), copy);
+      return row;
+    };
+    list.replaceChildren(el('p', 'ask-text', 'In the Claude terminal, run:'), command('/reload-plugins --force', 'reload'), command('/pair-review:connect', 'connect'),
+      el('div', 'muted picker-note', 'Waiting for connection…'));
+  }
+}
+
 /** The base branch menu: a filter over the branches the PR could merge into; GitHub's list arrives after it opens. */
 function openBaseMenu(): void {
   if (busy) return;
@@ -1574,11 +1677,11 @@ function render(state: OverviewState): void {
   $('number').replaceChildren(...state.number === undefined ? [] : [copyRef('#' + state.number, state.url, 'link to the pull request')]);
   $('title').textContent = state.heading ?? state.title;
   const canChangeBase = state.details?.canEdit === true && state.details.open;
-  const byline = JSON.stringify([state.author, state.headBranch, state.baseBranch, canChangeBase]);
+  const byline = JSON.stringify([state.author, state.headBranch, state.baseBranch, canChangeBase, state.branchPullRequest]);
   if ($('byline').dataset.stamp !== byline) {
     $('byline').dataset.stamp = byline;
     if (toolbarMenu?.anchor === 'change-base') closeToolbarMenu();
-    if (state.local) $('byline').replaceChildren('Uncommitted changes on', branchRef(state.headBranch));
+    if (state.local) $('byline').replaceChildren('Uncommitted changes on', branchRef(state.headBranch), ...state.branchPullRequest ? [pullRequestChip(state.branchPullRequest)] : []);
     else $('byline').replaceChildren(state.author + ' wants to merge', branchRef(state.headBranch), 'into', branchRef(state.baseBranch), ...canChangeBase ? [baseButton()] : []);
   }
   $('facts').replaceChildren(...pullRequestFacts(state));
@@ -1664,10 +1767,7 @@ function render(state: OverviewState): void {
   terminal.className = state.claude.running ? 'small' : 'quiet';
   terminal.textContent = state.claude.running ? 'Stop and open in terminal' : 'Open in terminal';
   terminal.dataset.tip = state.claude.running ? 'Stops Claude\'s background run, then continues its conversation in a terminal' : 'Continue this PR\'s Claude conversation in a terminal';
-  if (state.local) {
-    terminal.textContent = 'Connect Claude';
-    terminal.dataset.tip = 'Start or attach the Claude Code session that gets your comments';
-  }
+  renderConnectButton(state.claude.link);
   const unpushed = state.unpushed?.length ?? 0;
   const push = $('push');
   push.hidden = !unpushed || !details?.canEdit;
@@ -2872,9 +2972,14 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
   });
 }
 
-/** Files outside the changes that the page shows in their own tabs. */
+/** Files outside the changes that the page shows in their own tabs, in the order they were opened. */
 function tabFiles(): readonly FileDiff[] {
-  return files ? files.filter((file) => file.change === 'unchanged') : [];
+  if (!files) return [];
+  const opened = files.filter((file) => file.change === 'unchanged');
+  // A closed tab leaves the order, so opening it again puts it last.
+  tabOrder.splice(0, tabOrder.length, ...tabOrder.filter((path) => opened.some((file) => file.path === path)));
+  for (const file of opened) if (!tabOrder.includes(file.path)) tabOrder.push(file.path);
+  return [...opened].sort((a, b) => tabOrder.indexOf(a.path) - tabOrder.indexOf(b.path));
 }
 
 /** The tab that shows `path`: its own when it is an opened unchanged file, else Changes. */
@@ -2888,8 +2993,7 @@ function renderFileTabs(): void {
   if (fileTab !== undefined && !tabs.some((file) => file.path === fileTab)) fileTab = undefined;
   $('view-files').setAttribute('aria-selected', String(view === 'files' && fileTab === undefined));
   for (const id of ['whitespace', 'filter-box', 'filter-menu']) $(id).classList.toggle('off-view', fileTab !== undefined);
-  const list = $('view-files').parentElement;
-  if (!list) return;
+  const list = $('file-tabs');
   const left = list.scrollLeft;
   for (const old of list.querySelectorAll('.file-tab')) old.remove();
   for (const file of tabs) {
@@ -3680,19 +3784,6 @@ async function hopIntoAvatar(live: LiveLog): Promise<void> {
   delete pose.dataset.pose;
 }
 
-/** Open a new comment on lines picked outside the page, such as in the editor. */
-function compose({ path, side, startLine, endLine }: NonNullable<ExtensionMessage['compose']>): void {
-  if (!files?.some((file) => file.path === path)) { $('error').textContent = path + ' is not on this page.'; return; }
-  if (view === 'guide') setView('files');
-  const tab = tabOf(path);
-  const switched = tab !== fileTab;
-  fileTab = tab;
-  pick(path, side, startLine, false).end = endLine;
-  save();
-  renderFiles(switched ? undefined : [path]);
-  document.querySelector('[data-draft="composer"]')?.scrollIntoView({ block: 'center' });
-}
-
 function onExtensionMessage(data: ExtensionMessage): void {
   const live = data.state ? liveLogs() : [];
   if (data.state) render(data.state);
@@ -3737,7 +3828,6 @@ function onExtensionMessage(data: ExtensionMessage): void {
     renderFiles();
     document.querySelector('[data-path="' + CSS.escape(data.reveal) + '"]')?.scrollIntoView({ block: 'start' });
   }
-  if (data.compose) compose(data.compose);
   if (data.filesError) $('files').replaceChildren(el('p', 'bad', 'Could not read the changes: ' + data.filesError));
   if (data.notice) showNotice(data.notice);
   if (data.error) {
@@ -3789,6 +3879,9 @@ function onExtensionMessage(data: ExtensionMessage): void {
     renderFiles([allThreads().find((thread) => thread.id === id)?.path]);
   }
   if (data.branches) { baseBranches = data.branches; renderBaseMenu(); }
+  if (data.conversations || data.conversationsError !== undefined) { conversations = data.conversations ?? data.conversationsError; renderConnectMenu(); }
+  if (data.runningReady && connectView === 'preparing') { connectView = 'running'; renderConnectMenu(); }
+  if (data.error !== undefined && connectView === 'preparing' && toolbarMenu?.anchor === 'connect') closeToolbarMenu();
   if (data.branchesError !== undefined) { baseBranches = data.branchesError; renderBaseMenu(); }
   if (data.pickerOptions) { pickerOptions = data.pickerOptions; pickerError = undefined; renderPicker(); }
   if (data.pickerError !== undefined) { pickerError = data.pickerError; renderPicker(); }
@@ -3797,6 +3890,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
 
 $('show-unpushed').addEventListener('click', showUnpushed);
 for (const [id, action] of [['pr', 'pr'], ['push', 'push'], ['terminal', 'terminal'], ['retry', 'retry'], ['refresh', 'refresh']] as const) $(id).addEventListener('click', () => post({ action }));
+$('connect').addEventListener('click', openConnectMenu);
 $('remove-worktree').addEventListener('click', () => askInMenu('remove-worktree',
   'Remove the worktree for ' + (current?.number === undefined ? 'this PR' : '#' + current.number) + '? Its local comments are deleted too. Git refuses if it has uncommitted changes.',
   'Remove worktree', () => post({ action: 'remove-worktree' })));

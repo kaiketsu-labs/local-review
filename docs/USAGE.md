@@ -23,7 +23,11 @@ Open the review page, leave feedback, and keep reviewing. Each submitted comment
 
 The **Local** view in the Pair Review sidebar lists every file of the repository with Git's change marks and the number of open comments. **Review local changes** in its toolbar opens the review page. The **Changes** tab lists uncommitted changes and new files against HEAD. Any file you opened from the view or that has open threads gets its own tab, shown whole and marked **Not changed**. The tab's × closes it while the file has no comments.
 
-Click a line number, or drag across several, to comment. From the editor, select code and press **⌘⌥M** / **Ctrl+Alt+M** to open a comment on those lines on the page. The Threads card lists every thread with its file, line and status. Claude can reply and report progress; **you decide when a thread is resolved**. **Resolve** closes it and **Reopen** continues it. Nothing is deleted.
+With several checkouts, such as the window's folders, nested repositories and their Git worktrees, the view lists each checkout under its repository's row. The filter button in the view's title bar narrows them by repository, branch, or PR number or title. Its **Review local changes** button opens that checkout's own page, with its own comments, Viewed marks and Claude connection. Rows of PR worktrees open the PR's review page instead; their files open there, whole when the PR does not change them.
+
+When a checkout's branch has an open PR of yours, its page shows a **PR #N** chip beside the branch. The chip turns the tab into the PR's review page on that same checkout. Threads, Viewed marks and the connected Claude conversation carry over; Pair Review never moves the checkout, so pull GitHub's new commits yourself.
+
+Click a line number, or drag across several, to comment. The Threads card lists every thread with its file, line and status. Claude can reply and report progress; **you decide when a thread is resolved**. **Resolve** closes it and **Reopen** continues it. Nothing is deleted.
 
 **Viewed** on a file or on selected lines works as on PR pages. Marks lapse once the code changes. The page reads the files again when they change on disk.
 
@@ -35,17 +39,20 @@ Claude's code appears in syntax-colored blocks. Cmd/Ctrl-click a name in the dif
 
 Download a `.vsix` from [GitHub Releases](https://github.com/kaiketsu-labs/pair-review/releases), then choose **Extensions → … → Install from VSIX…** in VS Code. The extension is not published on the Marketplace yet.
 
-Open a trusted local Git repository and run **Pair Review: Mit Claude verbinden**:
+Open a trusted local Git repository and click **Connect Claude** on the local review page:
 
 | Choice | Result |
 | --- | --- |
-| **Unterhaltung auswählen** | Search this project's recent conversation names and branches; running conversations are marked. Claude's own picker remains available as a fallback. |
-| **Neue Unterhaltung** | Start a fresh conversation with review feedback enabled. |
-| **Laufende Unterhaltung verbinden** | Keep the original Claude process and conversation; use the setup view's two copyable commands inside it. Requires Claude Code 2.1.280+. |
+| **New conversation** | Start a fresh conversation with review feedback enabled. |
+| **Resume a conversation…** | Search this project's recent conversation names and branches; running conversations are marked. **All conversations in Claude…** opens Claude's own picker. |
+| **Connect running Claude** | Keep the original Claude process and conversation; run the menu's two copyable commands inside it. Requires Claude Code 2.1.280+. |
+| **Copy command** | Copy a start command for a terminal outside VS Code. |
+
+The Command Palette's **Pair Review: Mit Claude verbinden** offers the same choices when no review page is open.
 
 To connect a running conversation, prepare it in VS Code, then run `/reload-plugins --force` and `/pair-review:connect` in the intended Claude conversation. Pair Review installs a project-local plugin and waits for that session's actual receiver before showing **Feedback aktiv**. The reload rereads conversation context once. This works in either terminal location; the current authenticated walkthrough covers the integrated terminal. For a new/resumed conversation in a separate app, use **Review → … → Verbindungsbefehl kopieren** at a shell prompt. Keep the project's VS Code window open. [Connection details](CLAUDE-SESSION-ATTACH.md).
 
-Click **Review local changes** in the **Local** view, or select code and press **⌘⌥M** on macOS / **Ctrl+Alt+M** on Linux. Write your feedback and choose **Ask Claude** or **Implement**. Continue with the thread's **Reply**. Some labels are still German.
+Click **Review local changes** in the **Local** view, then click a line number. Write your feedback and choose **Ask Claude** or **Implement**. Continue with the thread's **Reply**. Some labels are still German.
 
 Requires **VS Code 1.100+**, **Node.js 22+**, **Git**, and an installed, authenticated **Claude Code with `asyncRewake` support**. macOS is the primary target; Linux is unverified. Automatic connection is currently unavailable on Windows. [Installation and troubleshooting →](INSTALL.md)
 

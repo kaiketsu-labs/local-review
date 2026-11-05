@@ -14,9 +14,14 @@ import { applySuggestion, parseSuggestions } from './suggestions.js';
 import { type FileDiff, highlightSource, readPullRequestDiff, wholeFileDiff } from './unifiedDiff.js';
 import { prepareHighlighting } from './codePreview.js';
 import { git } from './worktrees.js';
+import type { ClaudeLauncher } from './setup.js';
+import type { PullRequestSummary } from './pullRequests.js';
 
-const pageKey = 'local';
+/** Page key of the window folder's local review; other checkouts add their folder. */
+export const mainPageKey = 'local';
 const extrasKey = 'pairReview.localReview.files';
+/** How long a branch's PR lookup holds before the page asks GitHub again. */
+const pullRequestLookupMs = 60_000;
 /** Larger files show as binary instead of being highlighted whole. */
 const maxWholeFileBytes = 1024 * 1024;
 
@@ -61,6 +66,11 @@ export class LocalReview implements vscode.Disposable {
   /** Paths the last file read showed, which comments and marks must stay inside. */
   #shown: readonly FileDiff[] = [];
   #selection: DiffSelection = { range: { kind: 'all' }, whitespace: false };
+  /** Finds the branch's PR and opens it in this page's place; unset when GitHub is not available. */
+  #pullRequests: BranchPullRequests | undefined;
+  /** The last PR lookup, by branch; `pullRequest` is undefined when the branch has no open PR of yours. */
+  #found: { readonly branch: string; readonly at: number; readonly pullRequest: PullRequestSummary | undefined } | undefined;
+  #looking: string | undefined;
   /** Suggestion options written to files while the page is open, by thread, and the content before, so Discard can put it back. */
   readonly #applied = new Map<string, { readonly message: number; readonly option: number; readonly path: string; readonly before: string; readonly after: string }>();
 
@@ -72,6 +82,10 @@ export class LocalReview implements vscode.Disposable {
     private readonly bridge: ReviewBridge,
     /** Where review marks are kept, outside the repository. */
     private readonly dataPath: string,
+    /** Starts and connects the Claude conversation that gets this page's comments. */
+    private readonly launcher: ClaudeLauncher,
+    /** Names this checkout's page; also keeps its opened files apart from other checkouts'. */
+    private readonly pageKey: string = mainPageKey,
   ) {
     this.#definitions = new DefinitionPeeks(root);
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -86,26 +100,59 @@ export class LocalReview implements vscode.Disposable {
       { dispose: () => { if (timer !== undefined) clearTimeout(timer); } });
   }
 
+  /** Let the page find this branch's PR and open it in its place. */
+  usePullRequests(pullRequests: BranchPullRequests): void {
+    this.#pullRequests = pullRequests;
+  }
+
+  /** The page key, for a page that takes over this one's tab. */
+  get key(): string {
+    return this.pageKey;
+  }
+
+  /** The branch's PR from the last lookup; a stale or missing one is looked up again and redraws the page when it arrives. */
+  #branchPullRequest(branch: string): PullRequestSummary | undefined {
+    const known = this.#found?.branch === branch ? this.#found : undefined;
+    const pullRequests = this.#pullRequests;
+    if (pullRequests !== undefined && (known === undefined || Date.now() - known.at > pullRequestLookupMs) && this.#looking !== branch) {
+      this.#looking = branch;
+      const done = (pullRequest: PullRequestSummary | undefined): void => {
+        if (this.#looking === branch) this.#looking = undefined;
+        const changed = this.#found?.branch !== branch || this.#found.pullRequest?.number !== pullRequest?.number;
+        this.#found = { branch, at: Date.now(), pullRequest };
+        // A later turn, so a page still opening has subscribed to redraws by then.
+        if (changed) setTimeout(() => { this.#marksChanged.fire(); }, 0);
+      };
+      void pullRequests.find(branch).then(done, () => { done(undefined); });
+    }
+    return known?.pullRequest;
+  }
+
   /** Whether a path is part of the page's last file read. */
   #shows(path: string): boolean {
     return this.#shown.some((file) => file.path === path);
   }
 
   #extras(): readonly string[] {
-    return this.context.workspaceState.get<readonly string[]>(extrasKey, []).filter(isWorkspaceRelativePath);
+    return this.context.workspaceState.get<readonly string[]>(this.#extrasKey, []).filter(isWorkspaceRelativePath);
+  }
+
+  get #extrasKey(): string {
+    return this.pageKey === mainPageKey ? extrasKey : `${extrasKey}:${this.root}`;
   }
 
   async #keep(path: string): Promise<void> {
     const extras = this.#extras();
-    if (!extras.includes(path)) await this.context.workspaceState.update(extrasKey, [...extras, path]);
+    if (!extras.includes(path)) await this.context.workspaceState.update(this.#extrasKey, [...extras, path]);
   }
 
   /** Open the page, scrolled to `reveal` when given. */
   async open(reveal?: OverviewReveal): Promise<void> {
-    if (revealOpenPage(pageKey, reveal)) return;
-    await showPullRequestOverview(pageKey, () => this.#read(), (listener) => vscode.Disposable.from(
+    if (revealOpenPage(this.pageKey, reveal)) return;
+    await showPullRequestOverview(this.pageKey, () => this.#read(), (listener) => vscode.Disposable.from(
       toDisposable(this.store.onChange(() => { listener(undefined); })),
       toDisposable(this.bridge.onChange(() => { listener(undefined); })),
+      this.launcher.onDidChange(listener),
       this.#marksChanged.event(listener),
     ), this.#actions(), this.context.extensionUri, reveal, this.onDidChangeFiles);
   }
@@ -115,13 +162,6 @@ export class LocalReview implements vscode.Disposable {
     if (!isWorkspaceRelativePath(path)) throw new Error(`Unsupported file path: ${path}`);
     await this.#keep(path);
     await this.open({ path, reload: true });
-  }
-
-  /** Open a new comment on lines of a file, showing the file first. */
-  async commentOn(path: string, startLine: number, endLine: number): Promise<void> {
-    if (!isWorkspaceRelativePath(path)) throw new Error(`Unsupported file path: ${path}`);
-    await this.#keep(path);
-    await this.open({ compose: { path, side: 'new', startLine, endLine } });
   }
 
   async #base(): Promise<string> {
@@ -156,14 +196,17 @@ export class LocalReview implements vscode.Disposable {
   async #read(): Promise<OverviewState> {
     const base = await this.#base();
     const paths = this.#shown.map((file) => file.path);
-    const [viewed, read, branch] = await Promise.all([
+    const [viewed, read, current] = await Promise.all([
       readReviewedFiles(this.root, paths, this.dataPath),
       readReadRanges(this.root, base, this.dataPath).catch(() => []),
-      git(this.root, ['branch', '--show-current']).then((name) => name.trim() || base.slice(0, 7), () => base.slice(0, 7)),
+      git(this.root, ['branch', '--show-current']).then((name) => name.trim(), () => ''),
     ]);
+    const branch = current || base.slice(0, 7);
+    const pullRequest = current === '' ? undefined : this.#branchPullRequest(current);
     return {
       local: true,
-      title: 'Local changes',
+      ...pullRequest === undefined ? {} : { branchPullRequest: { number: pullRequest.number, title: pullRequest.title } },
+      title: `Local · ${basename(this.root)} @ ${branch}`,
       heading: basename(this.root),
       author: '',
       headBranch: branch,
@@ -172,7 +215,8 @@ export class LocalReview implements vscode.Disposable {
       viewed: [...viewed],
       read,
       reviewed: { done: viewed.size, total: paths.length },
-      claude: localClaudeStatus(this.bridge, this.store.pendingEvents.length),
+      claude: { ...localClaudeStatus(this.bridge, this.store.pendingEvents.length),
+        link: { delivering: this.bridge.state.deliveryReady === true, terminal: this.launcher.hasTerminal } },
       analysis: { running: false, stale: false },
       threads: this.store.threads.map((thread) => {
         const view = threadView(thread);
@@ -256,9 +300,16 @@ export class LocalReview implements vscode.Disposable {
       },
       openInEditor: async (path) => { await vscode.window.showTextDocument(this.#fileUri(path), { preview: false }); },
       closeFile: async (path) => {
-        await this.context.workspaceState.update(extrasKey, this.#extras().filter((each) => each !== path));
+        await this.context.workspaceState.update(this.#extrasKey, this.#extras().filter((each) => each !== path));
       },
-      openTerminal: async () => { await vscode.commands.executeCommand('pairReview.startClaude'); },
+      openTerminal: () => this.launcher.connect({ how: 'show' }).then(() => undefined),
+      openPullRequest: async () => {
+        const pullRequest = this.#found?.pullRequest;
+        if (pullRequest === undefined || this.#pullRequests === undefined) throw new Error('This branch has no open pull request.');
+        await this.#pullRequests.open(pullRequest);
+      },
+      claudeConversations: () => this.launcher.conversations(),
+      connectClaude: (choice) => this.launcher.connect(choice),
       revealThread: async (id) => { await this.openFile(this.#findThread(id).anchor.path); },
       applySuggestion: async (id, message, option) => {
         const { anchor, messages } = this.#findThread(id);
@@ -300,6 +351,12 @@ export class LocalReview implements vscode.Disposable {
   dispose(): void {
     for (const disposable of this.#disposables) disposable.dispose();
   }
+}
+
+/** Your open PRs by head branch, and opening one on the checkout in the local page's place. */
+export interface BranchPullRequests {
+  find(branch: string): Promise<PullRequestSummary | undefined>;
+  open(pullRequest: PullRequestSummary): Promise<void>;
 }
 
 /** A store or bridge subscription as a VS Code disposable. */

@@ -159,12 +159,24 @@ export class FileReviews implements vscode.Disposable {
   readonly onDidChange = this.#changed.event;
   readonly #viewed = new Map<string, Promise<Set<string>>>();
 
-  constructor(private readonly storageRoot: string) {}
+  constructor(
+    private readonly storageRoot: string,
+    /** A folder every PR's files are read from and where marks are kept, for PRs open on a checkout instead of their own worktree. */
+    private readonly at?: { readonly folder: string; readonly data: string },
+  ) {}
+
+  #folder(repository: string, number: number): string {
+    return this.at?.folder ?? worktreePath(this.storageRoot, repository, number);
+  }
+
+  #data(repository: string, number: number): string {
+    return this.at?.data ?? reviewDataPath(worktreePath(this.storageRoot, repository, number));
+  }
 
   /** Files among `paths` that are reviewed locally or marked Viewed on the code host. */
   async reviewed(provider: PullRequestProvider, repository: string, number: number, paths: readonly string[]): Promise<ReadonlySet<string>> {
     const [local, viewed] = await Promise.all([
-      readReviewedFiles(worktreePath(this.storageRoot, repository, number), paths),
+      readReviewedFiles(this.#folder(repository, number), paths, this.#data(repository, number)),
       this.#viewedOn(provider, repository, number).catch(() => new Set<string>()),
     ]);
     return new Set(paths.filter((path) => local.has(path) || viewed.has(path)));
@@ -172,7 +184,7 @@ export class FileReviews implements vscode.Disposable {
 
   /** Tick or untick a file here and on the code host. */
   async set(provider: PullRequestProvider, repository: string, number: number, path: string, reviewed: boolean): Promise<void> {
-    await setFileReviewed(worktreePath(this.storageRoot, repository, number), path, reviewed);
+    await setFileReviewed(this.#folder(repository, number), path, reviewed, this.#data(repository, number));
     const viewed = await this.#viewedOn(provider, repository, number).catch(() => undefined);
     if (reviewed) viewed?.add(path);
     else viewed?.delete(path);
@@ -182,16 +194,16 @@ export class FileReviews implements vscode.Disposable {
 
   /** Line ranges of a PR marked read and still unchanged. */
   readRanges(repository: string, number: number, base: string): Promise<readonly ReadRange[]> {
-    return readReadRanges(worktreePath(this.storageRoot, repository, number), base);
+    return readReadRanges(this.#folder(repository, number), base, this.#data(repository, number));
   }
 
   async markRead(repository: string, number: number, base: string, range: LineRange): Promise<void> {
-    await markRangeRead(worktreePath(this.storageRoot, repository, number), base, range);
+    await markRangeRead(this.#folder(repository, number), base, range, this.#data(repository, number));
     this.#changed.fire(`${repository}#${number}`);
   }
 
   async unmarkRead(repository: string, number: number, ids: readonly string[]): Promise<void> {
-    await unmarkRangesRead(worktreePath(this.storageRoot, repository, number), ids);
+    await unmarkRangesRead(this.#folder(repository, number), ids, this.#data(repository, number));
     this.#changed.fire(`${repository}#${number}`);
   }
 
