@@ -1,5 +1,5 @@
 import type * as vscode from 'vscode';
-import type { CodeAnchor, ReviewStore } from './contracts.js';
+import type { ReviewStore } from './contracts.js';
 import type { GitHubLink, Publication } from './pullRequestComments.js';
 
 /** Where a document sits inside a review: its path, and whether it shows the original side at `revision`. */
@@ -39,9 +39,4 @@ export interface ReviewSessionSource {
   readonly onDidChange: vscode.Event<void>;
   /** Fires when a session's Claude moves to another step. */
   readonly onDidChangeActivity?: vscode.Event<unknown>;
-}
-
-/** Document for an anchor's captured side within its session. */
-export function anchorDocumentUri(session: ReviewSession, anchor: CodeAnchor): vscode.Uri {
-  return anchor.side === 'original' ? session.originalUri(anchor.path, anchor.baseRevision) : session.workingUri(anchor.path);
 }

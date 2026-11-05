@@ -40,27 +40,13 @@ The status bar shows **Review · Verbinden** without a live connection, **Review
 
 ## Leave your first comment
 
-Run **Pair Review: Änderungen reviewen** and select a changed file. Select a line or block, then use **Pair Review: Kommentar hinzufügen**, the editor context menu, or **⌘⌥M / Ctrl+Alt+M**.
+Open the **Local** view in the Pair Review sidebar and click **Review local changes**. The review page lists your uncommitted changes and new files against HEAD. Click a line number, or drag across several, write your feedback and choose **Ask Claude** to discuss it or **Implement** to request a change. Typing alone does not send anything.
 
-The native inline field opens at the selected lines. You can also use the gutter **+** directly. Type `/a` to ask, `/i` to request implementation, or `/r` to summarize, followed by your feedback, then choose **Senden**. Prefixes are case-insensitive and switch the request mode when sending. Bare `/r` on an existing thread summarizes it without additional text. Typing alone does not send anything.
+From the editor, select code and press **⌘⌥M / Ctrl+Alt+M**, or use **Comment in review page** in the context menu. The page opens a comment on those lines. This also works on files without changes: they appear on the page whole, marked **Not changed**, and stay while they have open threads. Clicking a file in the **Local** view shows it on the page the same way. On a PR file, the same shortcut opens a comment on that PR's review page.
 
-The command, editor action and keyboard shortcut capture the code when opening the draft, preserving it if the file changes while you type. VS Code exposes drafts created with its own gutter **+** only at submission, so that path captures code when you send. Existing replies keep the conversation's original context.
+Each comment keeps the code it was written on. Claude's replies appear in the same thread, with code in syntax-colored blocks. Cmd/Ctrl-click a name in the diff to peek at its definition; **Open in editor** opens the file.
 
-Reply directly in the existing thread. The shortcut and editor action also support the original side of Pair Review diffs. Native unsent drafts are managed by VS Code; the extension does not guarantee their recovery after a reload.
-
-For live mode buttons and locally saved drafts, run **Pair Review: Feedback in Seitenansicht schreiben**. This compact composer follows new nonempty selections without stealing focus. Written drafts and existing replies stay pinned; use **Neue Auswahl kommentieren** to start another while keeping the old one. Active text composition is preserved before slash switching. Bare `/r` on a new comment explains that it needs an existing conversation. **Pair Review: Entwurf fortsetzen** restores the latest side-composer draft.
-
-New Claude replies are instructed to use Markdown code fences with a language label and real line breaks. Clearly recognized standalone JavaScript/TypeScript imports and exported functions are shown in a code box even in older unfenced replies; stored answer text remains unchanged. Ambiguous syntax and other languages still need explicit Markdown fences.
-
-Use the small **editor icon** in the reply header beside the author or beside the optional composer's code preview. Hover it for the **Code im Editor öffnen** label. Confirmed source opens in the project editor without closing the discussion. Hover symbols, use **Cmd-click** on macOS / **Ctrl-click** elsewhere, or press **F12** for definitions as supported by the language extension. If the reply is proposed code or cannot be uniquely located, **Codevorschau** opens a read-only snapshot with syntax colors; project navigation is limited. Original and captured snippets are never applied to a file by this action. A preview of an unsent draft may need reopening from that draft after a window reload.
-
-Wait for explicit receipt and Claude's reply. Review list entries show filename, line and status; **Zur Prüfung** means the implementation is ready for your review. Use the **✓ Als erledigt markieren** action on the thread or list entry when you accept it. Completed threads disappear by default. Use the Review toolbar's **eye · Erledigte anzeigen**, then **Wieder öffnen** to continue one. The visibility preference is saved per workspace; all discussion remains stored. Human and Claude messages use distinct avatars; VS Code controls the native card layout.
-
-For clearer unfocused comment windows, choose the **half-filled circle · Kommentarfenster hervorheben** in the Review toolbar, or run **Pair Review: Kommentarfenster hervorheben** from the Command Palette. Activate it once per project. It updates four workspace color overrides for the current theme; other native comments and Peek results share that surface. **Pair Review: Standarddarstellung wiederherstellen** restores prior managed values while retaining later manual edits. Dark and light themes have separate palettes; high-contrast themes keep their native appearance.
-
-## Share selected feedback with an open PR
-
-PR handoffs use your GitHub sign-in in VS Code and ask for it the first time. In the Review toolbar choose **An GitHub-PR übergeben**, select summaries and unresolved questions, review/edit the preview, and explicitly publish. This action does not acknowledge or resolve local feedback. See [PR handoff](PR-HANDOFF.md).
+Wait for Claude's reply. **Resolve** closes a thread when you accept it and **Reopen** continues it. The page updates when files change on disk.
 
 ## If the connection needs attention
 

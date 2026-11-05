@@ -12,31 +12,24 @@ Die Bilder sind nachgestellte Beispiele der Bedienung, keine Aufnahme einer gepr
 
 ## Direkt im Code kommentieren
 
-Markiere den Code oder klicke auf das **+** an der Zeile. Schreibe zum Beispiel `/i Nutze exponentielles Backoff.` und wähle **Senden**. Claude bekommt deinen Kommentar zusammen mit Datei, Zeilen und Codekontext. Ein ungesendeter Entwurf bleibt ein Entwurf.
+Öffne in der Seitenleiste die Ansicht **Local** und wähle **Review local changes**. Die Review-Seite zeigt deine noch nicht committeten Änderungen und neuen Dateien. Klicke auf eine Zeilennummer, schreibe zum Beispiel „Nutze exponentielles Backoff.“ und wähle **Implement**. Aus dem Editor öffnet **⌘⌥M / Ctrl+Alt+M** einen Kommentar zu den markierten Zeilen auf der Seite. Claude bekommt deinen Kommentar zusammen mit Datei, Zeilen und Codekontext. Ein ungesendeter Entwurf bleibt ein Entwurf.
 
-| Präfix | Was du möchtest |
+| Schaltfläche | Was du möchtest |
 | --- | --- |
-| `/a` | Eine Frage stellen oder den Code besprechen. |
-| `/i` | Eine konkrete Änderung umsetzen lassen. |
-| `/r` | Die Unterhaltung und ihre offenen Entscheidungen zusammenfassen. |
+| **Ask Claude** | Eine Frage stellen oder den Code besprechen. |
+| **Implement** | Eine konkrete Änderung umsetzen lassen. |
 
 ## Antwort prüfen
 
-Der Status zeigt, ob dein Auftrag wartet, empfangen wurde, bearbeitet wird oder zur Prüfung bereitsteht. Claudes Antwort erscheint im ursprünglichen Kommentarverlauf. Mehrzeiliger Code gehört in einen eigenen farbigen Codeblock. Das kleine **Editor-Symbol in der Kopfzeile neben Claude** öffnet den Code im richtigen Editor. Bei mehreren Codeblöcken wählst du den gewünschten aus.
+Der Status zeigt, ob dein Auftrag wartet, empfangen wurde, bearbeitet wird oder zur Prüfung bereitsteht. Claudes Antwort erscheint im ursprünglichen Thread auf der Review-Seite. Mehrzeiliger Code steht in einem eigenen farbigen Codeblock. **Open in editor** öffnet die Datei im Editor.
 
 Du kannst weiterfragen, eine weitere Änderung anfordern oder den Thread erledigen. **Eine Antwort von Claude erledigt den Thread nicht automatisch.**
 
-Mit **✓** erledigst du einen Thread direkt am Kommentar oder in der Review-Liste. Er verschwindet aus Editor und Listen. Das **Augen-Symbol · Erledigte anzeigen** holt die Unterhaltung zurück; **Wieder öffnen** macht sie wieder aktiv. Der Verlauf bleibt gespeichert.
+Mit **Resolve** erledigst du einen Thread, mit **Reopen** machst du ihn wieder aktiv. Der Verlauf bleibt gespeichert.
 
 ## Fragt Claude ständig nach Kommentaren?
 
 **Das Sprachmodell tut das nicht.** Ein kleiner Helfer auf deinem Rechner wartet im Hintergrund auf gesendetes Feedback. Sobald ein Kommentar vorliegt, gibt er dessen Inhalt an Claude weiter. Dafür sind keine laufenden Modellanfragen nötig. Falls gerade ein Werkzeug läuft, darf es zunächst fertig werden.
-
-## Auf Wunsch in den bestehenden GitHub-PR übernehmen
-
-Wähle **An GitHub-PR übergeben**, um verfügbare Zusammenfassungen und offene Fragen auszuwählen. Prüfe und bearbeite den Entwurf. Erst **Veröffentlichen** schreibt den sichtbaren Text als gemeinsamen Kommentar in den PR. Spätere Übergaben aktualisieren diesen Kommentar.
-
-`/r` fasst nur die lokale Unterhaltung zusammen. Die PR-Übergabe ist eine separate Aktion. [PR-Übergabe im Detail](PR-HANDOFF.md)
 
 <details>
 <summary>Technische Details und Quellen</summary>
@@ -56,8 +49,6 @@ Die Hook-Konfiguration aktiviert den Wartehelfer bei `SessionStart`, `UserPrompt
 Die lokale Übergabe verwendet eine authentifizierte Verbindung auf `127.0.0.1`. Claude nutzt für die eigentliche Modellverarbeitung weiterhin seinen konfigurierten Anbieter. Erzeugte Integrationsdateien liegen außerhalb des Projekt-Repositories im Workspace-Speicher. Dafür werden keine Projektdateien wie `.claude/settings.json` oder `.mcp.json` umgeschrieben. [Verbindungsprüfung](../src/connection.ts) · [Lokaler Server](../src/bridge.ts) · [Integrationsdateien](../src/setup.ts)
 
 **Warum Hooks der Standard sind:** Sie passen zum aktuellen Terminal- und Gateway-Ablauf. Der alternative Channels-Modus leitet Benachrichtigungen über MCP an Claude weiter und lässt sich ausdrücklich auswählen. Er ist derzeit eine Research Preview mit besonderen Anforderungen an Anmeldung und Organisationsfreigabe. Laut Claude-Dokumentation werden Bedrock, Vertex AI und Microsoft Foundry dafür nicht unterstützt. Die Kompatibilität mit einem beliebigen Gateway ist damit nicht zugesichert. Channels bleibt eine optionale Alternative. [Offizielle Claude-Code-Dokumentation zu Channels](https://code.claude.com/docs/en/channels) · [Transportwahl](../src/setup.ts) · [Channel-Benachrichtigungen](../src/channel.ts)
-
-Die PR-Aktion erzeugt eine geprüfte Momentaufnahme. Sie bestätigt keine lokale Zustellung und erledigt keine lokalen Threads. [Entwurf erzeugen](../src/prExport.ts) · [Vorschau und Veröffentlichung](../src/prExportController.ts)
 
 </details>
 

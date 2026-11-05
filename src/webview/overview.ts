@@ -146,7 +146,7 @@ const labels: Record<ReviewerState | CheckState, readonly [string, string, strin
 const methodLabels: Record<MergeMethod, string> = { squash: 'Squash and merge', merge: 'Create a merge commit', rebase: 'Rebase and merge' };
 const hideReasons: readonly (readonly [HideReason, string])[] = [['OUTDATED', 'Outdated'], ['RESOLVED', 'Resolved'], ['DUPLICATE', 'Duplicate'], ['OFF_TOPIC', 'Off-topic'],
   ['LOW_QUALITY', 'Low quality'], ['SPAM', 'Spam'], ['ABUSE', 'Abuse']];
-const changeLetters: Record<FileDiff['change'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' };
+const changeLetters: Record<FileDiff['change'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', unchanged: '' };
 const severityLabels: Record<Severity | 'unclassified', string> = { critical: 'Critical', significant: 'Significant', routine: 'Routine', trivial: 'Trivial', unclassified: 'Unclassified' };
 let guide: GuideGroup[] | undefined;
 let guideStamp = '';
@@ -1569,7 +1569,8 @@ function render(state: OverviewState): void {
   if ($('byline').dataset.stamp !== byline) {
     $('byline').dataset.stamp = byline;
     if (toolbarMenu?.anchor === 'change-base') closeToolbarMenu();
-    $('byline').replaceChildren(state.author + ' wants to merge', branchRef(state.headBranch), 'into', branchRef(state.baseBranch), ...canChangeBase ? [baseButton()] : []);
+    if (state.local) $('byline').replaceChildren('Uncommitted changes on', branchRef(state.headBranch));
+    else $('byline').replaceChildren(state.author + ' wants to merge', branchRef(state.headBranch), 'into', branchRef(state.baseBranch), ...canChangeBase ? [baseButton()] : []);
   }
   $('facts').replaceChildren(...pullRequestFacts(state));
   const { details } = state;
@@ -1654,6 +1655,10 @@ function render(state: OverviewState): void {
   terminal.className = state.claude.running ? 'small' : 'quiet';
   terminal.textContent = state.claude.running ? 'Stop and open in terminal' : 'Open in terminal';
   terminal.dataset.tip = state.claude.running ? 'Stops Claude\'s background run, then continues its conversation in a terminal' : 'Continue this PR\'s Claude conversation in a terminal';
+  if (state.local) {
+    terminal.textContent = 'Connect Claude';
+    terminal.dataset.tip = 'Start or attach the Claude Code session that gets your comments';
+  }
   const unpushed = state.unpushed?.length ?? 0;
   const push = $('push');
   push.hidden = !unpushed || !details?.canEdit;
@@ -1791,10 +1796,11 @@ function textarea(key: string, value: string, placeholder: string, onInput: (val
 }
 
 function composerBox(draft: Composer): HTMLElement {
-  const github = draft.target === 'github';
+  const github = draft.target === 'github' && !current?.local;
   const box = el('div', 'thread draft' + (github ? ' github' : ''));
   const head = el('div', 'strip');
   const toggle = el('span', 'seg');
+  toggle.hidden = current?.local === true;
   toggle.setAttribute('role', 'group');
   toggle.setAttribute('aria-label', 'Who sees this comment');
   for (const [value, label] of [['claude', 'Local'], ['github', 'On GitHub']] as const) {
@@ -2095,9 +2101,9 @@ function threadBox(thread: Thread): HTMLElement {
     box.append(publishBox(thread, draft));
     return box;
   }
-  actions.append(el('span', 'gap'), thread.url
+  actions.append(el('span', 'gap'), ...current?.local ? [] : [thread.url
     ? button('Open on GitHub ↗', () => post({ action: 'github', id: thread.id }), 'quiet')
-    : thread.source === 'local' ? toGitHubButton(thread) : button('Publish to GitHub…', () => post({ action: 'publish', id: thread.id }), 'quiet'));
+    : thread.source === 'local' ? toGitHubButton(thread) : button('Publish to GitHub…', () => post({ action: 'publish', id: thread.id }), 'quiet')]);
   actions.append(button(thread.resolved ? 'Reopen' : 'Resolve', () => post({ action: github ? 'github-resolve' : 'resolve', id: thread.id, resolved: !thread.resolved })));
   if (!thread.resolved) actions.append(button('Reply', () => { replies.set(thread.id, ''); focusNext = key; save(); renderFiles([thread.path]); }));
   box.append(actions);
@@ -2252,13 +2258,14 @@ function suggestionCard(thread: Extract<Thread, { source: 'local' }>, index: num
   publish.title = 'Adds it to your pending review as a GitHub suggestion the author can commit.';
   const canPush = current?.details?.canEdit === true;
   const apply = button(canPush ? 'Commit suggestion' : 'Apply', () => post({ action: 'apply-suggestion', ...where }), 'primary');
-  apply.title = !canPush ? 'Changes the file in the PR worktree. Nothing is committed, since you cannot push to this PR.'
+  apply.title = current?.local ? 'Changes the file. Nothing is committed.' : !canPush ? 'Changes the file in the PR worktree. Nothing is committed, since you cannot push to this PR.'
     : current?.unpushed?.length ? 'Commits the change after the unpushed commits. Push them together.' : 'Commits the change to the PR branch and pushes it.';
+  publish.hidden = current?.local === true;
   const done = thread.applied?.message === index ? thread.applied : undefined;
   if (done === undefined) actions.append(el('span', 'gap'), publish, apply);
   else if (done.done === 'pushed') actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + ' committed and pushed.'));
   else if (done.done === 'committed') actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + ' committed, not pushed yet.'));
-  else actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + ' applied to the worktree, not committed.'), button('Discard', () => post({ action: 'discard-suggestion', id: thread.id })), publish);
+  else actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + (current?.local ? ' applied, not committed.' : ' applied to the worktree, not committed.')), button('Discard', () => post({ action: 'discard-suggestion', id: thread.id })), publish);
   card.append(head, lines, actions);
   return card;
 }
@@ -2745,8 +2752,9 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
   const isRead = (row: Row): boolean => row.every((line) => !line || read.has(line));
   file.hunks.forEach((hunk, index) => {
     const gap = gaps[index];
-    if (gap) gapRows(gap, index, hunk.header);
-    else {
+    // An unchanged file is one hunk of every line, so it has no header or gaps to show.
+    if (file.change !== 'unchanged' && gap) gapRows(gap, index, hunk.header);
+    else if (file.change !== 'unchanged') {
       const header = el('tr', 'hunk');
       const cell = el('td', '', hunk.header);
       cell.colSpan = widths.length;
@@ -2769,7 +2777,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     }
   });
   const last = gaps[file.hunks.length];
-  if (last && file.change !== 'added' && file.change !== 'deleted') gapRows(last, file.hunks.length);
+  if (last && file.change !== 'added' && file.change !== 'deleted' && file.change !== 'unchanged') gapRows(last, file.hunks.length);
   return node;
 }
 
@@ -2826,7 +2834,7 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
     } else {
       container.replaceChildren();
       fileKeys.clear();
-      if (!shownFiles.length) container.append(el('p', 'muted', allFiles.length ? 'No files match the filter.' : diffRange.kind === 'all' ? 'No changes against the base branch.' : 'No changes in ' + rangeLabel(diffRange) + '.'));
+      if (!shownFiles.length) container.append(el('p', 'muted', allFiles.length ? 'No files match the filter.' : current?.local ? 'No uncommitted changes. Pick a file in the Local view to review it.' : diffRange.kind === 'all' ? 'No changes against the base branch.' : 'No changes in ' + rangeLabel(diffRange) + '.'));
       const append = (parent: HTMLElement, folder: FileFolder<FileDiff>, depth: number): void => {
         for (const child of folder.folders) {
           const isCollapsed = collapsed.get('folder:' + child.path) === true;
@@ -3012,7 +3020,7 @@ function renderThreadList(): void {
   $('threads-title').textContent = 'Threads (' + threads.length + ')';
   const list = $('threads');
   list.replaceChildren();
-  if (threads.length === 0) list.append(el('li', 'muted', current?.github || current?.githubError ? 'No comments yet.' : 'No local comments yet. Loading GitHub comments…'));
+  if (threads.length === 0) list.append(el('li', 'muted', current?.local || current?.github || current?.githubError ? 'No comments yet.' : 'No local comments yet. Loading GitHub comments…'));
   if (current?.githubError) list.append(el('li', 'bad', 'Could not load GitHub comments: ' + current.githubError));
   for (const kind of threadKinds) {
     const members = threads.filter((thread) => threadKind(thread) === kind && standalone(thread));
@@ -3294,7 +3302,8 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   const badge = el('span', 'badge ' + file.change, changeLetters[file.change]);
   badge.title = file.change;
   const stats = el('span', 'stats');
-  stats.append(el('span', 'stat-add', '+' + file.additions), ' ', el('span', 'stat-del', '−' + file.deletions));
+  if (file.change === 'unchanged') stats.append(el('span', 'file-chip', 'Not changed'));
+  else stats.append(el('span', 'stat-add', '+' + file.additions), ' ', el('span', 'stat-del', '−' + file.deletions));
   const label = el('label', 'viewed');
   const check = el('input');
   check.type = 'checkbox';
@@ -3314,13 +3323,16 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   });
   const kind = previewKind(file);
   const showPreview = kind !== undefined && (previewing.has(file.path) || previewOnly(file));
-  full.hidden = showPreview || file.binary || file.change === 'added' || file.change === 'deleted' || !file.hunks.length || !atHead;
+  full.hidden = showPreview || file.binary || file.change === 'added' || file.change === 'deleted' || file.change === 'unchanged' || !file.hunks.length || !atHead;
   const mode = previewSwitch(file, showPreview);
   const unresolved = threads.filter((thread) => !thread.resolved).length;
   const comments = el('span', 'muted comments', !threads.length ? '' : threads.length + (threads.length === 1 ? ' comment' : ' comments') + (unresolved === threads.length ? '' : ', ' + unresolved + ' open'));
   const chips = file.generated ? [el('span', 'file-chip', 'Generated')] : isLarge(file) ? [el('span', 'file-chip', 'Large diff')] : [];
   for (const chip of chips) chip.title = file.generated ? 'Generated file. GitHub folds these by default.' : 'Large diff, folded by default.';
-  head.append(chevron, name, badge, stats, ...chips, comments, mode, label, full, open);
+  const close = button('Close', () => post({ action: 'close-file', path: file.path }), 'quiet');
+  close.title = 'Stop showing this file here';
+  close.hidden = file.change !== 'unchanged' || threads.length > 0;
+  head.append(chevron, name, badge, stats, ...chips, comments, mode, label, full, open, close);
   box.append(head);
   const diff = el('div', 'diff');
   const placed = new Set(threads.filter((thread) => !standalone(thread)).map((thread) => thread.id));
@@ -3582,6 +3594,16 @@ async function hopIntoAvatar(live: LiveLog): Promise<void> {
   delete pose.dataset.pose;
 }
 
+/** Open a new comment on lines picked outside the page, such as in the editor. */
+function compose({ path, side, startLine, endLine }: NonNullable<ExtensionMessage['compose']>): void {
+  if (!files?.some((file) => file.path === path)) { $('error').textContent = path + ' is not on this page.'; return; }
+  if (view === 'guide') setView('files');
+  pick(path, side, startLine, false).end = endLine;
+  save();
+  renderFiles([path]);
+  document.querySelector('[data-draft="composer"]')?.scrollIntoView({ block: 'center' });
+}
+
 function onExtensionMessage(data: ExtensionMessage): void {
   const live = data.state ? liveLogs() : [];
   if (data.state) render(data.state);
@@ -3624,6 +3646,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
     renderFiles();
     document.querySelector('[data-path="' + CSS.escape(data.reveal) + '"]')?.scrollIntoView({ block: 'start' });
   }
+  if (data.compose) compose(data.compose);
   if (data.filesError) $('files').replaceChildren(el('p', 'bad', 'Could not read the changes: ' + data.filesError));
   if (data.notice) showNotice(data.notice);
   if (data.error) {

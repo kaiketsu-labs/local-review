@@ -28,8 +28,8 @@ async function fingerprint(worktree: string, relativePath: string): Promise<stri
   return hash;
 }
 
-function marksPath(worktree: string): string {
-  return join(reviewDataPath(worktree), 'reviewed-files.json');
+function marksPath(data: string): string {
+  return join(data, 'reviewed-files.json');
 }
 
 /** Lines marked read, kept as an anchor so the mark follows its code and lapses once that code changes. */
@@ -59,8 +59,8 @@ function isStoredRange(value: unknown): value is StoredRange {
 const maximumMarksBytes = 16 * 1024 * 1024;
 
 /** Rejects when the marks file is unreadable, so a write never replaces marks it could not read. */
-async function readMarks(worktree: string): Promise<Marks> {
-  const value = await readPrivateJson(marksPath(worktree), maximumMarksBytes);
+async function readMarks(data: string): Promise<Marks> {
+  const value = await readPrivateJson(marksPath(data), maximumMarksBytes);
   const { files, ranges } = typeof value === 'object' && value !== null ? value as { files?: unknown; ranges?: unknown } : {};
   return {
     files: typeof files === 'object' && files !== null
@@ -74,32 +74,32 @@ function noMarks(): Marks {
   return { files: {}, ranges: [] };
 }
 
-async function writeMarks(worktree: string, marks: Marks): Promise<void> {
-  await mkdir(reviewDataPath(worktree), { recursive: true, mode: 0o700 });
-  await writePrivateJson(marksPath(worktree), marks);
+async function writeMarks(data: string, marks: Marks): Promise<void> {
+  await mkdir(data, { recursive: true, mode: 0o700 });
+  await writePrivateJson(marksPath(data), marks);
 }
 
 const updates = new Map<string, Promise<void>>();
 
-/** Change a worktree's marks one update at a time, so concurrent ticks don't overwrite each other. */
-function updateMarks(worktree: string, change: (marks: Marks) => Marks | Promise<Marks>): Promise<void> {
-  const key = marksPath(worktree);
-  const run = (updates.get(key) ?? Promise.resolve()).then(async () => { await writeMarks(worktree, await change(await readMarks(worktree))); });
+/** Change the marks in `data` one update at a time, so concurrent ticks don't overwrite each other. */
+function updateMarks(data: string, change: (marks: Marks) => Marks | Promise<Marks>): Promise<void> {
+  const key = marksPath(data);
+  const run = (updates.get(key) ?? Promise.resolve()).then(async () => { await writeMarks(data, await change(await readMarks(data))); });
   updates.set(key, run.catch(() => undefined));
   return run;
 }
 
-/** Paths among `paths` marked reviewed whose content is unchanged since. */
-export async function readReviewedFiles(worktree: string, paths: readonly string[]): Promise<ReadonlySet<string>> {
-  const { files } = await readMarks(worktree).catch(() => noMarks());
+/** Paths among `paths` marked reviewed whose content is unchanged since. Marks live in `data`, beside the worktree unless given. */
+export async function readReviewedFiles(worktree: string, paths: readonly string[], data = reviewDataPath(worktree)): Promise<ReadonlySet<string>> {
+  const { files } = await readMarks(data).catch(() => noMarks());
   const current = await Promise.all(paths.map(async (path) => files[path] !== undefined && files[path] === await fingerprint(worktree, path)));
   return new Set(paths.filter((_path, index) => current[index]));
 }
 
 /** Mark a file reviewed at its current content, or clear the mark. */
-export async function setFileReviewed(worktree: string, relativePath: string, reviewed: boolean): Promise<void> {
+export async function setFileReviewed(worktree: string, relativePath: string, reviewed: boolean, data = reviewDataPath(worktree)): Promise<void> {
   if (!isWorkspaceRelativePath(relativePath)) throw new Error(`Unsupported file path: ${relativePath}`);
-  await updateMarks(worktree, async (marks) => {
+  await updateMarks(data, async (marks) => {
     if (reviewed) marks.files[relativePath] = await fingerprint(worktree, relativePath);
     else delete marks.files[relativePath];
     return marks;
@@ -124,8 +124,8 @@ async function sideText(worktree: string, base: string, path: string, side: Line
 }
 
 /** Ranges marked read whose code is still there, at its current lines against `base`. */
-export async function readReadRanges(worktree: string, base: string): Promise<readonly ReadRange[]> {
-  const { ranges } = await readMarks(worktree).catch(() => noMarks());
+export async function readReadRanges(worktree: string, base: string, data = reviewDataPath(worktree)): Promise<readonly ReadRange[]> {
+  const { ranges } = await readMarks(data).catch(() => noMarks());
   const texts = new Map<string, Promise<string | undefined>>();
   const found = await Promise.all(ranges.map(async ({ id, anchor }): Promise<ReadRange | undefined> => {
     const side = anchor.side === 'original' ? 'old' : 'new';
@@ -139,17 +139,17 @@ export async function readReadRanges(worktree: string, base: string): Promise<re
 }
 
 /** Mark lines read at their current content. */
-export async function markRangeRead(worktree: string, base: string, range: LineRange): Promise<void> {
+export async function markRangeRead(worktree: string, base: string, range: LineRange, data = reviewDataPath(worktree)): Promise<void> {
   if (!isWorkspaceRelativePath(range.path)) throw new Error(`Unsupported file path: ${range.path}`);
   const text = await sideText(worktree, base, range.path, range.side);
   if (text === undefined) throw new Error(`Could not read ${range.path}.`);
   const anchor = anchorFromText(text, { ...range, side: range.side === 'old' ? 'original' : 'working', baseRevision: base });
-  await updateMarks(worktree, (marks) => ({ ...marks, ranges: [...marks.ranges, { id: randomUUID(), anchor }] }));
+  await updateMarks(data, (marks) => ({ ...marks, ranges: [...marks.ranges, { id: randomUUID(), anchor }] }));
 }
 
 /** Clear read marks by id. */
-export async function unmarkRangesRead(worktree: string, ids: readonly string[]): Promise<void> {
-  await updateMarks(worktree, (marks) => ({ ...marks, ranges: marks.ranges.filter((range) => !ids.includes(range.id)) }));
+export async function unmarkRangesRead(worktree: string, ids: readonly string[], data = reviewDataPath(worktree)): Promise<void> {
+  await updateMarks(data, (marks) => ({ ...marks, ranges: marks.ranges.filter((range) => !ids.includes(range.id)) }));
 }
 
 /** Reviewed files per PR: local ticks merged with the code host's "Viewed" flags, which are cached until `forget`. */

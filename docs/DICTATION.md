@@ -2,9 +2,9 @@
 
 Du kannst das vorhandene macOS-Diktat im Kommentarfeld verwenden. Eine zusätzliche Erweiterung oder ein eigener Transkriptionsdienst ist dafür nicht nötig.
 
-Klicke zuerst in das **Kommentar- oder Antwortfeld**. Tippe bei Bedarf `/a` für eine Frage oder `/i` für eine Änderung. Drücke dann die Mikrofontaste deines Macs oder den in macOS eingestellten Diktat-Kurzbefehl und sprich dein Feedback. In der Seitenansicht kannst du den Modus auch über die vorhandenen Schaltflächen auswählen.
+Klicke zuerst in das **Kommentar- oder Antwortfeld**. Drücke dann die Mikrofontaste deines Macs oder den in macOS eingestellten Diktat-Kurzbefehl und sprich dein Feedback.
 
-Beende das Diktat, prüfe den erkannten Text und wähle **Senden**. Diktierte Wörter bleiben bis dahin ein Entwurf und werden wie getippter Text behandelt. Das Diktat löst keine automatische Veröffentlichung oder Codeänderung aus.
+Beende das Diktat, prüfe den erkannten Text und wähle **Ask Claude** für eine Frage oder **Implement** für eine Änderung. Diktierte Wörter bleiben bis dahin ein Entwurf und werden wie getippter Text behandelt. Das Diktat löst keine automatische Veröffentlichung oder Codeänderung aus.
 
 Welcher Kurzbefehl gilt, steht unter **Systemeinstellungen → Tastatur → Diktat**. Zweimal `Fn` ist eine mögliche Einstellung, aber nicht auf jedem Mac der aktuelle Kurzbefehl. Falls Diktat ausgeschaltet ist, musst du es dort aktivieren. Pair Review ändert diese Systemeinstellungen nicht und startet keine Mikrofonaufnahme.
 

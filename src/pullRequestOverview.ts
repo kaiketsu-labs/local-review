@@ -6,6 +6,7 @@ import { clawdLoaderStyles, clawdPoseStyles } from './clawdLoader.js';
 import type { ClaudeProgress } from './claudeRunner.js';
 import type { ReviewIntent, ReviewThread } from './contracts.js';
 import type { PullRequestSession } from './pullRequestSessions.js';
+import type { Publication } from './pullRequestComments.js';
 import { type CommentKind, type HideReason, type MergeMessage, type MergeMethod, type PickerOptions, type PullRequestConversation, type PullRequestDetails, type PullRequestSummary, type ReactionContent, reactionContents, type RemoteThread, type ReviewEvent } from './pullRequests.js';
 import type { PickedSelection } from './pullRequestEdits.js';
 import { webviewStyles } from './webviewStyles.js';
@@ -23,6 +24,8 @@ import type { MediaPreview } from './media.js';
 
 /** Everything the review page shows for one PR, apart from the diff itself. */
 export interface OverviewState {
+  /** Set on the local review page: the workspace's own uncommitted changes, without GitHub. */
+  readonly local?: true;
   /** `#number title`, for the editor tab; the page shows `heading` beside a copyable number. */
   readonly title: string;
   readonly number?: number;
@@ -200,6 +203,8 @@ export interface OverviewActions {
   markRead(range: LineRange, fileDone: boolean): Promise<void>;
   unmarkRead(ids: readonly string[]): Promise<void>;
   openInEditor(path: string): Promise<void>;
+  /** Stop showing an unchanged file that was opened on the page; local review only. */
+  closeFile?(path: string): Promise<void>;
   /** Open the PR's Claude conversation in a VS Code terminal. */
   openTerminal(): Promise<void>;
   /** Push the worktree's commits to the PR's branch. */
@@ -280,7 +285,7 @@ type PageRange = { readonly path: string; readonly side: DiffSide; readonly star
 export type PageMessage =
   | { readonly action: 'ready' | 'terminal' | 'push' | 'retry' | 'refresh' | 'pr' | 'analyze' | 'analysis-stop' | 'remove-worktree' }
   | { readonly action: 'publish' | 'github' | 'thread'; readonly id: string }
-  | { readonly action: 'context' | 'preview' | 'media' | 'editor'; readonly path: string }
+  | { readonly action: 'context' | 'preview' | 'media' | 'editor' | 'close-file'; readonly path: string }
   | (PageRange & { readonly action: 'comment'; readonly form: string; readonly text: string; readonly intent: CommentIntent })
   | (PageRange & { readonly action: 'github-comment'; readonly form: string; readonly text: string; readonly pending: boolean })
   | (PageRange & { readonly action: 'read'; readonly viewed: boolean })
@@ -336,6 +341,8 @@ export interface ExtensionMessage {
   /** GitHub's rendering of a form's text, for its Preview tab. */
   readonly markdown?: { readonly form: string; readonly html: string };
   readonly reveal?: string | undefined;
+  /** Lines to open a new comment on, after scrolling to their file. */
+  readonly compose?: PageRange | undefined;
   /** A guide step's key: show the guided layout at that step. */
   readonly revealStep?: string | undefined;
   /** A guide group's key: show the guided layout at that section. */
@@ -384,32 +391,42 @@ function parseRange(value: unknown, commits: readonly string[]): DiffRange | und
   if (kind === 'all' || kind === 'since') return { kind };
   return kind === 'commits' && isOid(from) && isOid(to) && commits.includes(from) && commits.includes(to) ? { kind, from, to } : undefined;
 }
-const panels = new Map<string, vscode.WebviewPanel>();
+/** Open review pages by key; `sendFiles` reads the files again and then shows `reveal`. */
+const panels = new Map<string, { readonly panel: vscode.WebviewPanel; readonly sendFiles: (reveal?: OverviewReveal) => void }>();
 
 const isLine = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1;
 const isText = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '' && value.length <= maximumReviewLength;
 
-/** Where the review page scrolls when it opens: a file, or a step of the guided review. */
-export type OverviewReveal = { readonly path: string } | { readonly step: string } | { readonly group: string };
+/** Where the review page scrolls when it opens: a file, a step of the guided review, or lines of a file to comment on. `reload` reads the files first, for a file the page may not show yet. */
+export type OverviewReveal = { readonly path: string; readonly reload?: true } | { readonly step: string } | { readonly group: string } | { readonly compose: PageRange };
 
 const revealMessage = (reveal: OverviewReveal | undefined): ExtensionMessage => reveal === undefined ? {}
-  : 'path' in reveal ? { reveal: reveal.path } : 'step' in reveal ? { revealStep: reveal.step } : { revealGroup: reveal.group };
+  : 'path' in reveal ? { reveal: reveal.path } : 'step' in reveal ? { revealStep: reveal.step } : 'group' in reveal ? { revealGroup: reveal.group }
+    : { reveal: reveal.compose.path, compose: reveal.compose };
 
-/** Show a PR's review page, reusing it when already open, and redraw it whenever `onDidChange` fires. */
+/** Show a review page if it is open; a reveal with lines to comment on reads the files again first, since they may not be on the page yet. */
+export function revealOpenPage(key: string, reveal?: OverviewReveal): boolean {
+  const page = panels.get(key);
+  if (page === undefined) return false;
+  page.panel.reveal();
+  if (reveal !== undefined && ('compose' in reveal || ('path' in reveal && reveal.reload === true))) page.sendFiles(reveal);
+  else if (reveal !== undefined) void page.panel.webview.postMessage(revealMessage(reveal)).then(undefined, () => undefined);
+  return true;
+}
+
+/**
+ * Show a review page, reusing it when already open, and redraw it whenever `onDidChange` fires.
+ * `onDidChangeFiles` reads the files again, for a page whose files change without a commit.
+ */
 export async function showPullRequestOverview(
   key: string, read: () => Promise<OverviewState>, onDidChange: vscode.Event<unknown>, actions: OverviewActions, extensionUri: vscode.Uri, revealAt?: OverviewReveal,
+  onDidChangeFiles?: vscode.Event<unknown>,
 ): Promise<void> {
-  const existing = panels.get(key);
-  if (existing !== undefined) {
-    existing.reveal();
-    if (revealAt !== undefined) void existing.webview.postMessage(revealMessage(revealAt)).then(undefined, () => undefined);
-    return;
-  }
+  if (revealOpenPage(key, revealAt)) return;
   let reveal = revealAt;
   let state = await read();
   const panel = vscode.window.createWebviewPanel('pairReview.pullRequestOverview', state.title, vscode.ViewColumn.Active,
     { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'resources'), vscode.Uri.joinPath(extensionUri, 'dist')], retainContextWhenHidden: true });
-  panels.set(key, panel);
   const resource = (...parts: string[]): string => panel.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, ...parts)).toString();
   panel.webview.html = overviewHtml(state, resource('dist', 'overview.js'), resource('dist', 'pdf.js'));
   const post = (message: ExtensionMessage): void => { void panel.webview.postMessage(message).then(undefined, () => undefined); };
@@ -421,6 +438,7 @@ export async function showPullRequestOverview(
       post({ filesError: error instanceof Error ? error.message : String(error) });
     });
   };
+  panels.set(key, { panel, sendFiles: (next) => { reveal = next; sendFiles(); } });
   const conversation = (): PullRequestConversation | undefined => state.conversation;
   /** A comment on this page the viewer may change in the way `may` names, found in the conversation or a GitHub thread. */
   const findComment = (id: unknown, may: 'canEdit' | 'canDelete' | 'canHide' | 'canReact'): boolean => typeof id === 'string'
@@ -567,6 +585,10 @@ export async function showPullRequestOverview(
           && startLine <= endLine && typeof viewed === 'boolean') await marking(actions.markRead({ path, side, startLine, endLine }, viewed));
         else if (action === 'unread' && Array.isArray(ids) && ids.length <= 1000 && ids.every((item) => typeof item === 'string')) await marking(actions.unmarkRead(ids as string[]));
         else if (action === 'editor' && typeof path === 'string') await actions.openInEditor(path);
+        else if (action === 'close-file' && typeof path === 'string' && actions.closeFile !== undefined) {
+          await actions.closeFile(path);
+          sendFiles();
+        }
         else if (action === 'github' && typeof id === 'string') {
           const url = [...state.threads, ...state.github ?? []].find((thread) => thread.id === id)?.url;
           if (url !== undefined) await vscode.env.openExternal(vscode.Uri.parse(url));
@@ -651,6 +673,7 @@ export async function showPullRequestOverview(
     shownProblem = problem;
   });
   subscriptions.push(sync, panel.onDidChangeViewState(({ webviewPanel }) => { if (webviewPanel.visible) sync.now(); }));
+  if (onDidChangeFiles !== undefined) subscriptions.push(onDidChangeFiles(() => { sendFiles(); }));
   sync.now();
   panel.onDidDispose(() => {
     if (timer !== undefined) clearTimeout(timer);
@@ -672,7 +695,7 @@ export function overviewHtml(state: OverviewState, script: string, pdfScript?: s
 ${webviewStyles}
 ${codePreviewStyles()}
 body{margin:0;padding:var(--space-24) var(--space-24) 48px}
-[hidden]{display:none!important}
+[hidden],body.local .pr-only{display:none!important}
 h1{font-size:18px;line-height:26px;font-weight:600;margin:0;overflow-wrap:anywhere}
 h2{font-size:14px;font-weight:600;margin:0}
 h3{margin:0 0 var(--space-8);font-size:12px;line-height:18px;font-weight:600;color:var(--ink)}
@@ -681,6 +704,7 @@ h3{margin:0 0 var(--space-8);font-size:12px;line-height:18px;font-weight:600;col
 .status{margin-top:var(--space-12);font-size:12px}
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:var(--space-16);margin-top:var(--space-16);align-items:start}
 @media (max-width:760px){.layout{grid-template-columns:minmax(0,1fr)}}
+body.local .layout{grid-template-columns:minmax(0,1fr)}
 .main-col{display:grid;gap:var(--space-16);min-width:0}
 .card{padding:var(--space-12);border:1px solid var(--line);border-radius:var(--radius-md)}
 .rail{border:1px solid var(--line);border-radius:var(--radius-md)}.rail section{padding:var(--space-12)}.rail section+section{border-top:1px solid var(--line)}
@@ -891,10 +915,10 @@ tr.annotation td{padding:var(--space-4) 10px}.annotation-box{display:flex;gap:va
 .suggest-row{margin-top:var(--space-6);gap:var(--space-6)}.suggest-row button{min-height:22px;padding:0 var(--space-8);font-size:12px}
 
 .byline .icon-button{width:20px;height:20px;min-height:20px}
-</style></head><body>
-<div class="row head"><span class="title-row"><span id="number"></span><h1 id="title"></h1><button id="edit-title" class="icon-button" data-pr-action data-tip="Edit title" aria-label="Edit title" hidden>${codicons.edit}</button></span><span class="toolbar"><button id="pr" class="icon-button" data-tip="Open on GitHub" aria-label="Open on GitHub">${codicons.github}</button><button id="refresh" class="icon-button" data-tip="Refresh" aria-label="Refresh">${codicons.refresh}</button><span class="menu-anchor"><button id="remove-worktree" class="icon-button" data-tip="Remove worktree" aria-label="Remove worktree" aria-haspopup="true" aria-expanded="false">${codicons.trash}</button></span></span></div>
+</style></head><body${state.local ? ' class="local"' : ''}>
+<div class="row head"><span class="title-row"><span id="number"></span><h1 id="title"></h1><button id="edit-title" class="icon-button" data-pr-action data-tip="Edit title" aria-label="Edit title" hidden>${codicons.edit}</button></span><span class="toolbar"><button id="pr" class="icon-button pr-only" data-tip="Open on GitHub" aria-label="Open on GitHub">${codicons.github}</button><button id="refresh" class="icon-button" data-tip="Refresh" aria-label="Refresh">${codicons.refresh}</button><span class="menu-anchor pr-only"><button id="remove-worktree" class="icon-button" data-tip="Remove worktree" aria-label="Remove worktree" aria-haspopup="true" aria-expanded="false">${codicons.trash}</button></span></span></div>
 <div class="row byline"><span id="byline" class="row muted"></span><span id="verdict" class="verdict" hidden></span></div>
-<div id="facts" class="muted facts"></div>
+<div id="facts" class="muted facts pr-only"></div>
 <div class="row status"><div class="progress" id="reviewed"></div><span id="claude"></span><button id="terminal" class="quiet" data-tip="Continue this PR's Claude conversation in a terminal">Open in terminal</button><button id="retry" class="small">Retry</button></div>
 <p id="error" role="alert"></p>
 <p id="notice" role="status"></p>
@@ -906,11 +930,11 @@ tr.annotation td{padding:var(--space-4) 10px}.annotation-box{display:flex;gap:va
 <button id="peek-close" title="Close" aria-label="Close"><svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div><div id="peek-code"></div></aside>
 <div class="layout">
 <div class="main-col">
-<section class="card"><div class="section-head"><h3>Description</h3><button id="edit-body" class="icon-button" data-pr-action data-tip="Edit description" aria-label="Edit description" hidden>${codicons.edit}</button></div><div id="body"></div><div id="description-reactions"></div></section>
+<section class="card pr-only"><div class="section-head"><h3>Description</h3><button id="edit-body" class="icon-button" data-pr-action data-tip="Edit description" aria-label="Edit description" hidden>${codicons.edit}</button></div><div id="body"></div><div id="description-reactions"></div></section>
 <section class="card"><h3 id="threads-title">Threads</h3><ul id="threads"></ul></section>
-<section class="card" id="conversation"><button id="fold-conversation" class="section-fold" aria-expanded="true" aria-controls="timeline">${codicons.chevronDown}<h3>Conversation</h3><span id="conversation-count" class="count"></span></button><div id="timeline"></div><div id="conversation-form"></div></section>
+<section class="card pr-only" id="conversation"><button id="fold-conversation" class="section-fold" aria-expanded="true" aria-controls="timeline">${codicons.chevronDown}<h3>Conversation</h3><span id="conversation-count" class="count"></span></button><div id="timeline"></div><div id="conversation-form"></div></section>
 </div>
-<aside class="rail">
+<aside class="rail pr-only">
 <section><div class="section-head"><h3>Reviewers</h3><button id="pick-reviewers" class="icon-button" data-pr-action data-tip="Request reviewers" aria-label="Request reviewers" hidden>${codicons.gear}</button></div><ul id="reviewers"></ul></section>
 <section><div class="section-head"><h3>Assignees</h3><button id="pick-assignees" class="icon-button" data-pr-action data-tip="Edit assignees" aria-label="Edit assignees" hidden>${codicons.gear}</button></div><ul id="assignees"></ul></section>
 <section><div class="section-head"><h3>Labels</h3><button id="pick-labels" class="icon-button" data-pr-action data-tip="Edit labels" aria-label="Edit labels" hidden>${codicons.gear}</button></div><div id="labels" class="labels"></div></section>
@@ -929,13 +953,13 @@ tr.annotation td{padding:var(--space-4) 10px}.annotation-box{display:flex;gap:va
 </div>
 <div id="files-bar" class="row head"><span class="row view-head"><span class="tabs" role="tablist" aria-label="Show">
 <button id="view-files" role="tab">Files<span id="files-count" class="count"></span></button>
-<button id="view-guide" role="tab">${codicons.map}Guide<span id="guide-count" class="count" hidden></span></button></span>
-<span class="menu-anchor"><button id="range" class="range-button" aria-label="Changes from" aria-haspopup="true" aria-expanded="false">${codicons.gitCommit}<span class="range-text">All changes</span>${codicons.chevronDown}</button></span>
+<button id="view-guide" class="pr-only" role="tab">${codicons.map}Guide<span id="guide-count" class="count" hidden></span></button></span>
+<span class="menu-anchor pr-only"><button id="range" class="range-button" aria-label="Changes from" aria-haspopup="true" aria-expanded="false">${codicons.gitCommit}<span class="range-text">All changes</span>${codicons.chevronDown}</button></span>
 <span id="files-title" class="muted"></span></span><span class="toolbar">
-<span id="analysis-status"></span><button id="analyze" class="small">Build guide</button>
-<span id="analyze-divider" class="divider"></span>
-<button id="commit-batch" class="primary small" data-pr-action hidden></button>
-<button id="show-unpushed" class="small" data-tip="Show the commits you would push" hidden>Show changes</button><button id="push" class="primary small" data-tip="Commits in this worktree that GitHub does not have yet" hidden></button>
+<span id="analysis-status" class="pr-only"></span><button id="analyze" class="small pr-only">Build guide</button>
+<span id="analyze-divider" class="divider pr-only"></span>
+<button id="commit-batch" class="primary small pr-only" data-pr-action hidden></button>
+<button id="show-unpushed" class="small pr-only" data-tip="Show the commits you would push" hidden>Show changes</button><button id="push" class="primary small pr-only" data-tip="Commits in this worktree that GitHub does not have yet" hidden></button>
 <span id="filter-box" class="filter-box"><input id="file-filter" type="text" placeholder="Filter files" aria-label="Filter files"><button id="filter-clear" class="icon-button" aria-label="Clear filter" hidden>${codicons.close}</button></span>
 <span class="menu-anchor"><button id="filter-menu" class="icon-button" data-tip="Filter files" aria-label="Filter files" aria-haspopup="true" aria-expanded="false">${codicons.filter}</button></span>
 <button id="whitespace" class="icon-button" data-tip="Hide whitespace changes" aria-label="Hide whitespace changes">${codicons.whitespace}</button>
@@ -1013,42 +1037,65 @@ export function buildOverviewState(
       ...(runner.activity.progress === undefined ? {} : { progress: runner.activity.progress }) },
     analysis,
     threads: session.store.threads.map((thread) => {
+      const activity = session.activity?.(thread.id);
       const publication = session.publication?.(thread.id);
       const linkedTo = session.linkedGitHubThread?.(thread.id);
-      const activity = session.activity?.(thread.id);
-      const last = thread.messages.at(-1);
-      // Claude's reply ends the thread's live log, even while the run is still wrapping up.
-      const replied = last?.author === 'claude' && Date.parse(last.createdAt) >= (runner.activity.progress?.startedAt ?? Infinity);
-      const working = thread.resolved || replied ? undefined : activity?.startsWith('Claude · ') ? activity.slice('Claude · '.length)
-        : activity === undefined && (thread.status === 'queued' || thread.status === 'received' || thread.status === 'working') ? threadStatus[thread.status] : undefined;
-      const status = [
-        thread.resolved ? 'Resolved' : working !== undefined ? undefined : replied ? threadStatus[thread.status] : activity ?? threadStatus[thread.status],
-        publication === undefined ? undefined : publication.pending ? 'On GitHub (pending)' : 'On GitHub',
-      ].filter(Boolean).join(' · ');
-      return {
-        id: thread.id,
-        location: `${thread.anchor.path}:${thread.anchor.startLine}`,
-        text: thread.messages[0]?.text.replaceAll(/\s+/gu, ' ').slice(0, 140) ?? '',
-        status,
-        ...(working === undefined ? {} : { working }),
-        ...(working !== undefined && runner.activity.threads.has(thread.id) && runner.activity.progress !== undefined ? { progress: runner.activity.progress } : {}),
-        path: thread.anchor.path,
-        side: thread.anchor.side === 'original' ? 'old' : 'new',
-        startLine: thread.anchor.startLine,
-        endLine: thread.anchor.endLine,
-        resolved: thread.resolved,
-        ...(thread.origin === undefined ? {} : { origin: thread.origin }),
-        ...(thread.messages.some(({ text }) => parseSuggestions(text).length) ? { original: highlightSource(thread.anchor.selectedText, thread.anchor.path) } : {}),
-        messages: thread.messages.map(({ author, text, createdAt }) => {
-          const suggestions = parseSuggestions(text).map((suggestion) => highlightSource(suggestion.code, thread.anchor.path));
-          return { author, html: markdownHtml(suggestions.length ? withoutSuggestions(text) : text), createdAt, ...(suggestions.length ? { suggestions } : {}) };
-        }),
-        ...(publication === undefined ? {} : { url: publication.url }),
-        ...(linkedTo === undefined ? {} : { linkedTo }),
-        ...(publication === undefined && !thread.resolved ? { draft: publishableText(thread) } : {}),
-        ...(thread.title === undefined ? {} : { title: thread.title }),
-        ...(opened.commits(thread.id).length === 0 ? {} : { commits: opened.commits(thread.id) }),
-      };
+      const progress = runner.activity.progress;
+      return threadView(thread, {
+        ...(activity === undefined ? {} : { activity }), ...(publication === undefined ? {} : { publication }),
+        ...(linkedTo === undefined ? {} : { linkedTo }), ...(progress === undefined ? {} : { progress }),
+        running: runner.activity.threads.has(thread.id), publishable: true, commits: opened.commits(thread.id),
+      });
     }),
+  };
+}
+
+/** What Claude is doing on a thread, where it was published and the commits Claude made for it, when the session knows. */
+interface ThreadExtras {
+  readonly activity?: string;
+  readonly progress?: ClaudeProgress;
+  /** Whether the current Claude run answers this thread. */
+  readonly running?: boolean;
+  readonly publication?: Publication;
+  readonly linkedTo?: string;
+  /** Whether the thread can be posted on GitHub, so the page offers its text as a draft. */
+  readonly publishable?: boolean;
+  readonly commits?: readonly { readonly oid: string; readonly subject: string }[];
+}
+
+/** One local thread as the review page shows it, its messages rendered from Markdown. */
+export function threadView(thread: ReviewThread, { activity, progress, running = false, publication, linkedTo, publishable = false, commits = [] }: ThreadExtras = {}): OverviewState['threads'][number] {
+  const last = thread.messages.at(-1);
+  // Claude's reply ends the thread's live log, even while the run is still wrapping up.
+  const replied = last?.author === 'claude' && Date.parse(last.createdAt) >= (progress?.startedAt ?? Infinity);
+  const working = thread.resolved || replied ? undefined : activity?.startsWith('Claude · ') ? activity.slice('Claude · '.length)
+    : activity === undefined && (thread.status === 'queued' || thread.status === 'received' || thread.status === 'working') ? threadStatus[thread.status] : undefined;
+  const status = [
+    thread.resolved ? 'Resolved' : working !== undefined ? undefined : replied ? threadStatus[thread.status] : activity ?? threadStatus[thread.status],
+    publication === undefined ? undefined : publication.pending ? 'On GitHub (pending)' : 'On GitHub',
+  ].filter(Boolean).join(' · ');
+  return {
+    id: thread.id,
+    location: `${thread.anchor.path}:${thread.anchor.startLine}`,
+    text: thread.messages[0]?.text.replaceAll(/\s+/gu, ' ').slice(0, 140) ?? '',
+    status,
+    ...(working === undefined ? {} : { working }),
+    ...(working !== undefined && running && progress !== undefined ? { progress } : {}),
+    path: thread.anchor.path,
+    side: thread.anchor.side === 'original' ? 'old' : 'new',
+    startLine: thread.anchor.startLine,
+    endLine: thread.anchor.endLine,
+    resolved: thread.resolved,
+    ...(thread.origin === undefined ? {} : { origin: thread.origin }),
+    ...(thread.messages.some(({ text }) => parseSuggestions(text).length) ? { original: highlightSource(thread.anchor.selectedText, thread.anchor.path) } : {}),
+    messages: thread.messages.map(({ author, text, createdAt }) => {
+      const suggestions = parseSuggestions(text).map((suggestion) => highlightSource(suggestion.code, thread.anchor.path));
+      return { author, html: markdownHtml(suggestions.length ? withoutSuggestions(text) : text), createdAt, ...(suggestions.length ? { suggestions } : {}) };
+    }),
+    ...(publication === undefined ? {} : { url: publication.url }),
+    ...(linkedTo === undefined ? {} : { linkedTo }),
+    ...(publishable && publication === undefined && !thread.resolved ? { draft: publishableText(thread) } : {}),
+    ...(thread.title === undefined ? {} : { title: thread.title }),
+    ...(commits.length === 0 ? {} : { commits }),
   };
 }

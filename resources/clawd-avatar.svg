@@ -1,4 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 20 20" shape-rendering="crispEdges">
-  <circle cx="10" cy="10" r="10" fill="#D97757" fill-opacity=".18" shape-rendering="geometricPrecision"/>
-  <path fill="#D97757" d="M6 6h8v1h-8zM6 7h1v1h-1zM8 7h4v1h-4zM13 7h1v1h-1zM4 8h12v1h-12zM4 9h12v1h-12zM6 10h8v1h-8zM6 11h8v1h-8zM6 12h1v1h-1zM8 12h1v1h-1zM11 12h1v1h-1zM13 12h1v1h-1zM6 13h1v1h-1zM8 13h1v1h-1zM11 13h1v1h-1zM13 13h1v1h-1z"/>
-</svg>

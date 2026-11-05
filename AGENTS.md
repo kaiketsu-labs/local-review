@@ -1,14 +1,15 @@
 # Project instructions
 
-Pair Review is a VS Code extension for reviewing code with Claude: native inline comments on local changes, and a PR review page for GitHub pull requests. Keep the native VS Code workflow simple and preserve existing behavior.
+Pair Review is a VS Code extension for reviewing code with Claude on one review page, for local changes and for GitHub pull requests. Editing and navigation stay in VS Code's editor. Keep the workflow simple and preserve existing behavior.
 
 ## Code map
 
 - `src/extension.ts` wires everything together, including the actions the PR review page calls.
 - `src/pullRequestOverview.ts` is the PR review page's extension side: its HTML and CSS, and the messages it exchanges with the page. `src/webview/overview.ts` is the page script, bundled for the browser into `dist/overview.js`.
-- `src/reviewedFiles.ts` stores per-PR review marks: files ticked Viewed and line ranges marked read.
+- `src/localReview.ts` feeds the review page in local mode: the workspace repository's changes against HEAD, untracked files, and unchanged files shown whole. `src/localFilesView.ts` is the Local sidebar view.
+- `src/reviewedFiles.ts` stores review marks: files ticked Viewed and line ranges marked read.
 - `src/unifiedDiff.ts` parses `git diff` into highlighted hunks. `src/anchors.ts` captures and relocates code by content.
-- `src/pullRequests.ts` reads and writes PRs through `src/githubApi.ts`, which signs in with VS Code's GitHub account. `src/github.ts` handles PR handoff. `src/pullRequestView.ts` is the PR sidebar.
+- `src/pullRequests.ts` reads and writes PRs through `src/githubApi.ts`, which signs in with VS Code's GitHub account. `src/pullRequestView.ts` is the PR sidebar.
 
 ## Code
 
@@ -42,22 +43,17 @@ Pair Review is a VS Code extension for reviewing code with Claude: native inline
 ## Product invariants
 
 - Submitted comments are delivered automatically. Unsent keystrokes are not agent instructions.
-- Native inline input is the default, with one send action and `/a`, `/i`, `/r` interpreted when sending. The optional compact side composer previews modes while typing.
+- Comments are written on the review page, for local changes and PRs, and sent with **Ask Claude** or **Implement**. The editor shortcut opens a comment on the selected lines there; it does not add native editor comments.
 - Explain automatic feedback delivery in plain language. Keep transport names in optional technical details; the hook-based default supports the terminal/gateway workflow while Channels remains an experimental opt-in.
 - Voice input uses the user's existing macOS Dictation. Do not add an audio recorder or transcription service unless requested separately.
-- Keep inline conversations anchored to their code. In the side composer, empty drafts may follow new explicit selections; written drafts and replies must not silently change targets.
+- Keep conversations anchored to their code. Replies must not silently change targets.
 - `ask` and `summarize` request discussion without edits; `implement` requests scoped code changes.
-- `/r` summarizes a local conversation. Publishing to a GitHub PR is a separate preview-and-publish action.
-- PR handoff publishes the reviewed snapshot only and does not acknowledge delivery or resolve local threads.
+- Publishing a PR's Local thread to GitHub is a separate preview-and-publish action.
 - Only the human can resolve a thread. An agent response is not human acceptance.
 - Preserve immutable event IDs and original code context across edits and restarts.
 - A transport connection is not a delivery acknowledgment.
 - Do not silently attach uncertain comments or read marks to another line of code.
-- Code actions open current project code only after a confirmed content match. Proposed, missing or ambiguous snippets stay read-only; Markdown code blocks do not claim native editor semantics.
-- Code-reference actions belong in the native comment header, alongside the author, without a separate action row in the body.
-- Code examples may intentionally stop at a function header. Display repair must preserve their bytes and surrounding prose without inventing a function body or closing brace.
-- Native header actions bind original comment objects to opaque session handles. Model-provided paths or command arguments cannot select navigation targets; reply Markdown stays untrusted.
-- Native code cards use only approved theme-aware markup. Neutralize original message HTML before enabling generated HTML; navigation continues reading undecorated stored code.
+- Reply Markdown stays untrusted. Model-provided paths or command arguments cannot select navigation targets.
 - Keep connection credentials outside the repository and preserve existing Claude configuration.
 
 ## Commands
