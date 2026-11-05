@@ -578,6 +578,8 @@ export const languages = {
 export const ViewColumn = { Active: -1, Beside: -2, One: 1 } as const;
 export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 } as const;
 export const ColorThemeKind = { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 } as const;
+/** Installed extensions, which tests fill with the contributions they read. */
+export const extensions = { all: [] as { readonly extensionPath: string; readonly packageJSON: unknown }[] };
 export const ProgressLocation = { Notification: 15 } as const;
 interface FakeTreeView {
   title: string;

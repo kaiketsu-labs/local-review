@@ -21,7 +21,7 @@ Open the review page, leave feedback, and keep reviewing. Each submitted comment
 | **Ask Claude** | Explain a decision or discuss the code. |
 | **Implement** | Make the requested change, then return it for your review. |
 
-The **Local** view in the Pair Review sidebar lists every file of the repository with Git's change marks and the number of open comments. **Review local changes** in its toolbar opens the review page: uncommitted changes and new files against HEAD, then any file you opened from the view or that has open threads, shown whole and marked **Not changed**. **Close** on such a file removes it again.
+The **Local** view in the Pair Review sidebar lists every file of the repository with Git's change marks and the number of open comments. **Review local changes** in its toolbar opens the review page. The **Changes** tab lists uncommitted changes and new files against HEAD. Any file you opened from the view or that has open threads gets its own tab, shown whole and marked **Not changed**. The tab's × closes it while the file has no comments.
 
 Click a line number, or drag across several, to comment. From the editor, select code and press **⌘⌥M** / **Ctrl+Alt+M** to open a comment on those lines on the page. The Threads card lists every thread with its file, line and status. Claude can reply and report progress; **you decide when a thread is resolved**. **Resolve** closes it and **Reopen** continues it. Nothing is deleted.
 

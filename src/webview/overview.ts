@@ -8,6 +8,7 @@ import { fullyRead, rangeReadIds, readLines, type MarkedRange } from '../readLin
 import type { LineRange } from '../reviewedFiles.js';
 import type { DiffHunk, DiffLine, FileDiff } from '../unifiedDiff.js';
 import { codicons } from '../codicons.js';
+import type { FileIcon, FileIcons } from '../fileIcons.js';
 import { mediaType, type MediaPreview, type MediaSide } from '../media.js';
 import type * as PdfJs from 'pdfjs-dist';
 
@@ -37,6 +38,7 @@ interface Saved {
   readonly hiddenTypes?: readonly string[];
   readonly conversationDraft?: string;
   readonly conversationFolded?: boolean;
+  readonly fileTab?: string | undefined;
 }
 type Thread = (OverviewState['threads'][number] & { readonly source: 'local'; readonly pending?: never; readonly outdated?: never })
   | (GitHubThreadView & { readonly source: 'github' });
@@ -58,6 +60,13 @@ const saved = (api.getState() ?? {}) as Saved;
 const nonce = document.currentScript?.nonce ?? '';
 let layout: Layout = saved.layout === 'split' ? 'split' : 'unified';
 let view: View = saved.view === 'guide' || (saved.view === undefined && saved.layout === 'guided') ? 'guide' : 'files';
+/** The local page's open file tab, an unchanged file shown alone; undefined shows the Changes tab. */
+let fileTab = saved.fileTab;
+/** The file tab last scrolled into view, so redraws keep the tab row where the user scrolled it. */
+let scrolledTab: string | undefined;
+let fileIcons: FileIcons | undefined;
+/** CSS font families of the icon theme's fonts already added to the page, by font id. */
+const iconFonts = new Map<string, string>();
 let peekWidth = saved.peekWidth;
 let folders = saved.folders === true;
 const collapsed = new Map(Object.entries(saved.collapsed ?? {}));
@@ -239,7 +248,7 @@ function frameMain(): void {
 
 function save(): void {
   api.setState({ layout, view, peekWidth, folders, collapsed: Object.fromEntries(collapsed), previewing: [...previewing], composer, replies: Object.fromEntries(replies), publishing: Object.fromEntries(publishing),
-    range: wantedRange ?? diffRange, whitespace, filter: fileFilter, hideViewed, hiddenTypes: [...hiddenTypes], conversationDraft, conversationFolded });
+    range: wantedRange ?? diffRange, whitespace, filter: fileFilter, hideViewed, hiddenTypes: [...hiddenTypes], conversationDraft, conversationFolded, fileTab });
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -2301,6 +2310,7 @@ function jump(thread: Thread): void {
     return;
   }
   if (view === 'guide' && !document.getElementById('thread-' + thread.id)) { setView('files'); }
+  if (tabOf(thread.path) !== fileTab) { fileTab = tabOf(thread.path); save(); renderFiles(); }
   if (collapsed.get(thread.path) || folderOf(thread.path).some((folder) => collapsed.get('folder:' + folder))) {
     collapsed.set(thread.path, false);
     openFolders(thread.path);
@@ -2634,7 +2644,10 @@ function selectedReadIds(file: FileDiff, selection: LineRange): string[] | undef
 function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, draft: Composer | null | undefined = composer?.path === file.path ? composer : undefined, expandKey = file.path): HTMLTableElement {
   const node = el('table');
   const columns = el('colgroup');
-  const widths = layout === 'split' ? ['num', '', 'num', ''] : ['num', 'num', ''];
+  // An unchanged file has the same lines on both sides, so it shows them once with one line number.
+  const single = file.change === 'unchanged';
+  const split = layout === 'split' && !single;
+  const widths = split ? ['num', '', 'num', ''] : single ? ['num', ''] : ['num', 'num', ''];
   for (const name of widths) columns.append(el('col', name));
   node.append(columns);
   const notes = annotationsOf(file.path);
@@ -2644,7 +2657,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     for (const [side, line] of covers) {
       if (line === undefined) continue;
       if (draft?.side === side && draft.start <= line && line <= draft.end) {
-        const cells = [...row.children].slice(layout === 'split' && side === 'new' ? 2 : 0, layout === 'split' && side === 'old' ? 2 : undefined);
+        const cells = [...row.children].slice(split && side === 'new' ? 2 : 0, split && side === 'old' ? 2 : undefined);
         for (const cell of cells) cell.classList.add('sel');
         cells[0]?.classList.add('sel-start');
       }
@@ -2667,7 +2680,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
   };
   const lineRow = (line: DiffLine, hidden = false): void => {
     const row = el('tr', line.kind);
-    row.append(num(line.oldLine, file.path, 'old'), num(line.newLine, file.path, 'new'), code(line, ''));
+    row.append(...single ? [] : [num(line.oldLine, file.path, 'old')], num(line.newLine, file.path, 'new'), code(line, ''));
     add(row, [['old', line.oldLine], ['new', line.newLine]], hidden);
   };
   const pairRow = (left: DiffLine | undefined, right: DiffLine | undefined, hidden = false): void => {
@@ -2683,7 +2696,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     const html = contextLines.get(file.path)?.[newLine - 1];
     if (html === undefined) return;
     const line: DiffLine = { kind: 'context', oldLine: newLine + offset, newLine, html };
-    if (layout === 'split') pairRow(line, line);
+    if (split) pairRow(line, line);
     else lineRow(line);
   };
   const gaps = gapsOf(file);
@@ -2746,7 +2759,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     for (let line = gap.to - bottom + 1; line <= gap.to; line++) contextRow(line, gap.offset);
   };
   const draw = (row: Row, hidden: boolean): void => {
-    if (layout === 'split') pairRow(row[0], row[1], hidden);
+    if (split) pairRow(row[0], row[1], hidden);
     else if (row[0]) lineRow(row[0], hidden);
   };
   const isRead = (row: Row): boolean => row.every((line) => !line || read.has(line));
@@ -2761,7 +2774,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
       header.append(cell);
       node.append(header);
     }
-    const rows: Row[] = layout === 'split' ? pairs(hunk) : hunk.lines.map((line) => [line]);
+    const rows: Row[] = split ? pairs(hunk) : hunk.lines.map((line) => [line]);
     for (let at = 0; at < rows.length;) {
       const row = rows[at];
       if (row && !isRead(row)) { draw(row, false); at += 1; continue; }
@@ -2795,7 +2808,7 @@ function setTip(button: HTMLElement, tip: string): void {
 /** Redraw the file list; given paths, or 'state' for files whose state changed, redraw only those boxes when the rest are on the page. */
 function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
   for (const name of ['unified', 'split'] as const) $(name).setAttribute('aria-pressed', String(layout === name));
-  for (const name of ['files', 'guide'] as const) $('view-' + name).setAttribute('aria-selected', String(view === name));
+  for (const name of ['files', 'guide'] as const) $('view-' + name).setAttribute('aria-selected', String(view === name && fileTab === undefined));
   showGuideTab();
   renderRangeControls();
   const folderButton = $('folders');
@@ -2805,8 +2818,11 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
   folderButton.setAttribute('aria-pressed', String(folders));
   if (!files) return;
   if (view === 'guide') { keepView(() => renderGuide(only)); return; }
-  const allFiles = files;
-  const shownFiles = filteredFiles(allFiles);
+  renderFileTabs();
+  const tabs = tabFiles();
+  const tabbed = tabs.find((file) => file.path === fileTab);
+  const allFiles = tabbed ? [tabbed] : files.filter((file) => !tabs.includes(file));
+  const shownFiles = tabbed ? allFiles : filteredFiles(allFiles);
   const container = $('files');
   const threadsByFile = new Map<string, Thread[]>();
   for (const thread of allThreads()) {
@@ -2854,6 +2870,73 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
     if (folders) updateFolderProgress(tree);
     for (const frame of container.querySelectorAll<HTMLIFrameElement>('iframe.html-preview')) layoutMargin(frame, frameTops.get(frame.dataset.path ?? '') ?? {});
   });
+}
+
+/** Unchanged files the local page shows in their own tabs. */
+function tabFiles(): readonly FileDiff[] {
+  return current?.local && files ? files.filter((file) => file.change === 'unchanged') : [];
+}
+
+/** The tab that shows `path`: its own when it is an opened unchanged file, else Changes. */
+function tabOf(path: string): string | undefined {
+  return tabFiles().some((file) => file.path === path) ? path : undefined;
+}
+
+/** One tab per opened unchanged file after Changes, closable while the file has no comments. */
+function renderFileTabs(): void {
+  const tabs = tabFiles();
+  if (fileTab !== undefined && !tabs.some((file) => file.path === fileTab)) fileTab = undefined;
+  $('view-files').setAttribute('aria-selected', String(view === 'files' && fileTab === undefined));
+  for (const id of ['whitespace', 'filter-box', 'filter-menu']) $(id).classList.toggle('off-view', fileTab !== undefined);
+  const list = $('view-files').parentElement;
+  if (!list) return;
+  const left = list.scrollLeft;
+  for (const old of list.querySelectorAll('.file-tab')) old.remove();
+  for (const file of tabs) {
+    const name = file.path.split('/').pop() ?? file.path;
+    const tab = button(name, () => { fileTab = file.path; save(); renderFiles(); });
+    const icon = fileIcons?.byPath[file.path];
+    if (icon) tab.prepend(iconNode(icon));
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(fileTab === file.path));
+    tab.title = file.path;
+    const wrap = el('span', 'file-tab');
+    wrap.append(tab);
+    if (!allThreads().some((thread) => thread.path === file.path)) {
+      const close = button('', () => post({ action: 'close-file', path: file.path }), 'icon-button tab-close');
+      close.innerHTML = codicons.close;
+      setTip(close, 'Close ' + name);
+      wrap.append(close);
+    }
+    list.append(wrap);
+  }
+  list.scrollLeft = left;
+  if (scrolledTab !== fileTab) {
+    scrolledTab = fileTab;
+    list.querySelector('[aria-selected=true]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+}
+
+/** A theme file icon: a glyph of an icon font, added to the page on first use, or an image. */
+function iconNode(icon: FileIcon): HTMLElement {
+  if ('image' in icon) {
+    const image = el('img', 'file-icon');
+    image.src = icon.image;
+    image.alt = '';
+    return image;
+  }
+  let family = iconFonts.get(icon.font);
+  const data = fileIcons?.fonts[icon.font];
+  if (family === undefined && data !== undefined) {
+    family = 'file-icons-' + iconFonts.size;
+    iconFonts.set(icon.font, family);
+    document.head.append(el('style', '', '@font-face{font-family:"' + family + '";src:url("' + data + '")}'));
+  }
+  const glyph = el('span', 'file-icon', icon.char);
+  glyph.setAttribute('aria-hidden', 'true');
+  if (family) glyph.style.fontFamily = '"' + family + '"';
+  if (icon.color) glyph.style.color = icon.color;
+  return glyph;
 }
 
 /** Folders a path sits in, outermost first: every prefix, so compacted folder rows match too. */
@@ -3329,10 +3412,7 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   const comments = el('span', 'muted comments', !threads.length ? '' : threads.length + (threads.length === 1 ? ' comment' : ' comments') + (unresolved === threads.length ? '' : ', ' + unresolved + ' open'));
   const chips = file.generated ? [el('span', 'file-chip', 'Generated')] : isLarge(file) ? [el('span', 'file-chip', 'Large diff')] : [];
   for (const chip of chips) chip.title = file.generated ? 'Generated file. GitHub folds these by default.' : 'Large diff, folded by default.';
-  const close = button('Close', () => post({ action: 'close-file', path: file.path }), 'quiet');
-  close.title = 'Stop showing this file here';
-  close.hidden = file.change !== 'unchanged' || threads.length > 0;
-  head.append(chevron, name, badge, stats, ...chips, comments, mode, label, full, open, close);
+  head.append(chevron, name, badge, stats, ...chips, comments, mode, label, full, open);
   box.append(head);
   const diff = el('div', 'diff');
   const placed = new Set(threads.filter((thread) => !standalone(thread)).map((thread) => thread.id));
@@ -3484,7 +3564,7 @@ function showGuideTab(): void {
   count.className = analysis?.running ? 'count working' : 'count';
   count.textContent = analysis?.running || steps === undefined ? '' : String(steps);
   count.hidden = !analysis?.running && steps === undefined;
-  $('files-count').textContent = files ? String(files.length) : '';
+  $('files-count').textContent = files ? String(files.length - tabFiles().length) : '';
   for (const id of ['analyze', 'analysis-status', 'analyze-divider']) $(id).classList.toggle('off-view', view !== 'guide');
   for (const id of ['range', 'whitespace', 'filter-box', 'filter-menu']) $(id).classList.toggle('off-view', view !== 'files');
 }
@@ -3598,9 +3678,12 @@ async function hopIntoAvatar(live: LiveLog): Promise<void> {
 function compose({ path, side, startLine, endLine }: NonNullable<ExtensionMessage['compose']>): void {
   if (!files?.some((file) => file.path === path)) { $('error').textContent = path + ' is not on this page.'; return; }
   if (view === 'guide') setView('files');
+  const tab = tabOf(path);
+  const switched = tab !== fileTab;
+  fileTab = tab;
   pick(path, side, startLine, false).end = endLine;
   save();
-  renderFiles([path]);
+  renderFiles(switched ? undefined : [path]);
   document.querySelector('[data-draft="composer"]')?.scrollIntoView({ block: 'center' });
 }
 
@@ -3610,6 +3693,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
   for (const log of live) void hopIntoAvatar(log);
   const shownAs = JSON.stringify([diffRange, whitespace, atHead]);
   if (data.selection) { diffRange = data.selection.range; whitespace = data.selection.whitespace; atHead = data.atHead !== false; save(); }
+  if (data.icons) fileIcons = data.icons;
   if (data.files) {
     const changed = changedFiles(data.files, shownAs);
     files = data.files;
@@ -3640,6 +3724,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
   if (data.revealStep) revealStep(data.revealStep);
   if (data.revealGroup) revealGroup(data.revealGroup);
   if (data.reveal && files) {
+    fileTab = tabOf(data.reveal);
     collapsed.set(data.reveal, false);
     openFolders(data.reveal);
     save();
@@ -3781,7 +3866,7 @@ $('peek-open').addEventListener('click', () => {
 });
 $('unified').addEventListener('click', () => { layout = 'unified'; save(); renderFiles(); });
 $('split').addEventListener('click', () => { layout = 'split'; save(); renderFiles(); });
-for (const name of ['files', 'guide'] as const) $('view-' + name).addEventListener('click', () => { setView(name); });
+for (const name of ['files', 'guide'] as const) $('view-' + name).addEventListener('click', () => { fileTab = undefined; setView(name); });
 $('range').addEventListener('click', openRangeMenu);
 $('whitespace').addEventListener('click', () => requestFiles(diffRange, !whitespace));
 $<HTMLInputElement>('file-filter').value = fileFilter;

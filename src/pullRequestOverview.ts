@@ -1,3 +1,4 @@
+import type { FileIcons } from './fileIcons.js';
 import { randomUUID } from 'node:crypto';
 import * as vscode from 'vscode';
 import { pollWhileFocused } from './autoSync.js';
@@ -148,7 +149,7 @@ export interface GitHubMessageView {
 export type DiffRange = { readonly kind: 'all' } | { readonly kind: 'since' } | { readonly kind: 'commits'; readonly from: string; readonly to: string };
 export interface DiffSelection { readonly range: DiffRange; readonly whitespace: boolean }
 /** The files of a selection; `atHead` when the new side is the PR's latest version, so comments and context lines match it. */
-export interface FilesView { readonly files: readonly FileDiff[]; readonly selection: DiffSelection; readonly atHead: boolean }
+export interface FilesView { readonly files: readonly FileDiff[]; readonly selection: DiffSelection; readonly atHead: boolean; readonly icons?: FileIcons }
 /** A GitHub suggestion picked for committing: the thread and its comment. */
 /** A suggestion option written from a local thread: pushed, committed after unpushed commits, or only applied to the worktree. */
 export interface AppliedSuggestion { readonly message: number; readonly option: number; readonly done: 'pushed' | 'committed' | 'applied' }
@@ -333,6 +334,8 @@ export type PageMessage =
 export interface ExtensionMessage {
   readonly state?: OverviewState;
   readonly files?: readonly FileDiff[];
+  /** Theme icons for the files the page shows in their own tabs. */
+  readonly icons?: FileIcons;
   /** The selection `files` shows, and whether its new side is the PR's latest version. */
   readonly selection?: DiffSelection;
   readonly atHead?: boolean;
@@ -431,8 +434,8 @@ export async function showPullRequestOverview(
   panel.webview.html = overviewHtml(state, resource('dist', 'overview.js'), resource('dist', 'pdf.js'));
   const post = (message: ExtensionMessage): void => { void panel.webview.postMessage(message).then(undefined, () => undefined); };
   const sendFiles = (select?: DiffSelection): void => {
-    void actions.readFiles(select).then(({ files, selection, atHead }) => {
-      post({ files, selection, atHead, ...revealMessage(reveal) });
+    void actions.readFiles(select).then(({ files, selection, atHead, icons }) => {
+      post({ files, selection, atHead, ...icons === undefined ? {} : { icons }, ...revealMessage(reveal) });
       reveal = undefined;
     }, (error: unknown) => {
       post({ filesError: error instanceof Error ? error.message : String(error) });
@@ -689,7 +692,7 @@ export function overviewHtml(state: OverviewState, script: string, pdfScript?: s
   // Inline styles are allowed because an HTML preview frame inherits this policy; its sandbox still blocks scripts.
   return `<!doctype html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; font-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <title>Review</title>
 <style nonce="${nonce}">
 ${webviewStyles}
@@ -739,10 +742,11 @@ section:has(>.picker){position:relative}.picker{position:absolute;top:28px;left:
 #error{position:fixed;left:var(--space-24);right:var(--space-24);bottom:var(--space-16);z-index:5;max-width:520px;margin:0;padding:var(--space-8) var(--space-12);border:1px solid var(--danger);border-radius:var(--radius-lg);color:var(--ink);background:linear-gradient(var(--danger-soft),var(--danger-soft)),var(--surface-raised);box-shadow:var(--shadow-overlay);white-space:pre-wrap;cursor:pointer}#error:empty{display:none}
 #files-bar{position:sticky;top:0;z-index:2;margin-top:var(--space-24);padding:var(--space-8) 0;background:var(--surface)}
 #files-bar h2 .muted{font-weight:400}
-.view-head{gap:var(--space-12)}.tabs{display:flex;gap:var(--space-4)}
+.view-head{gap:var(--space-12);min-width:0;max-width:100%}.tabs{display:flex;gap:var(--space-4);min-width:0;max-width:100%;overflow-x:auto;scrollbar-width:thin}
 .tabs button{display:inline-flex;align-items:center;gap:var(--space-6);min-height:28px;padding:0 var(--space-8);border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--ink-muted);background:none;font-size:14px;font-weight:600}
 .tabs button:hover{color:var(--ink);filter:none}.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ink)}
 .tabs svg{width:16px;height:16px;fill:currentColor}
+.tabs>*{flex:none;white-space:nowrap}.file-tab{display:inline-flex;align-items:center;padding-left:var(--space-4);border-left:1px solid var(--line)}.file-icon{display:inline-block;width:16px;font-size:14px;font-weight:400;line-height:1;text-align:center}img.file-icon{height:16px}.file-tab .tab-close{min-height:20px;padding:0 var(--space-4);border-bottom:0;font-weight:400}.file-tab .tab-close svg{width:12px;height:12px}
 .tabs .count{min-width:18px;height:18px;padding:0 var(--space-6);border-radius:var(--radius-pill);font-size:11px;font-weight:600;line-height:18px;text-align:center;color:var(--ink);background:color-mix(in srgb,var(--ink) 12%,transparent)}.tabs .count:empty:not(.working){display:none}
 .tabs .count.working{min-width:0;padding:0;background:var(--claude)}
 ${clawdLoaderStyles()}
@@ -952,7 +956,7 @@ tr.annotation td{padding:var(--space-4) 10px}.annotation-box{display:flex;gap:va
 </aside>
 </div>
 <div id="files-bar" class="row head"><span class="row view-head"><span class="tabs" role="tablist" aria-label="Show">
-<button id="view-files" role="tab">Files<span id="files-count" class="count"></span></button>
+<button id="view-files" role="tab">${state.local ? 'Changes' : 'Files'}<span id="files-count" class="count"></span></button>
 <button id="view-guide" class="pr-only" role="tab">${codicons.map}Guide<span id="guide-count" class="count" hidden></span></button></span>
 <span class="menu-anchor pr-only"><button id="range" class="range-button" aria-label="Changes from" aria-haspopup="true" aria-expanded="false">${codicons.gitCommit}<span class="range-text">All changes</span>${codicons.chevronDown}</button></span>
 <span id="files-title" class="muted"></span></span><span class="toolbar">

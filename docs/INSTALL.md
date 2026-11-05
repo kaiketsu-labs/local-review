@@ -42,7 +42,7 @@ The status bar shows **Review · Verbinden** without a live connection, **Review
 
 Open the **Local** view in the Pair Review sidebar and click **Review local changes**. The review page lists your uncommitted changes and new files against HEAD. Click a line number, or drag across several, write your feedback and choose **Ask Claude** to discuss it or **Implement** to request a change. Typing alone does not send anything.
 
-From the editor, select code and press **⌘⌥M / Ctrl+Alt+M**, or use **Comment in review page** in the context menu. The page opens a comment on those lines. This also works on files without changes: they appear on the page whole, marked **Not changed**, and stay while they have open threads. Clicking a file in the **Local** view shows it on the page the same way. On a PR file, the same shortcut opens a comment on that PR's review page.
+From the editor, select code and press **⌘⌥M / Ctrl+Alt+M**, or use **Comment in review page** in the context menu. The page opens a comment on those lines. This also works on files without changes: they open on the page whole in their own tab, marked **Not changed**, and stay while they have open threads. Clicking a file in the **Local** view shows it on the page the same way. On a PR file, the same shortcut opens a comment on that PR's review page.
 
 Each comment keeps the code it was written on. Claude's replies appear in the same thread, with code in syntax-colored blocks. Cmd/Ctrl-click a name in the diff to peek at its definition; **Open in editor** opens the file.
 

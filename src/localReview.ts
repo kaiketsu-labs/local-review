@@ -5,6 +5,7 @@ import { anchorFromText } from './anchors.js';
 import type { CodeAnchor, ReviewBridge, ReviewStore, ReviewThread } from './contracts.js';
 import { DefinitionPeeks } from './definitions.js';
 import { readFilePreview, readMediaSides } from './fileContent.js';
+import { readFileIcons } from './fileIcons.js';
 import { getHeadRevision, isWorkspaceRelativePath, readGitBase } from './git.js';
 import { mediaType } from './media.js';
 import { type DiffSelection, type FilesView, type OverviewActions, type OverviewReveal, type OverviewState, type PageComment, revealOpenPage, showPullRequestOverview, threadView } from './pullRequestOverview.js';
@@ -148,7 +149,8 @@ export class LocalReview implements vscode.Disposable {
     this.#selection = { range: { kind: 'all' }, whitespace };
     // Viewed marks and progress count the files shown, so the page's state is read again for them.
     this.#marksChanged.fire();
-    return { files, selection: this.#selection, atHead: true };
+    const icons = await readFileIcons(files.filter((file) => file.change === 'unchanged').map((file) => file.path)).catch(() => undefined);
+    return { files, selection: this.#selection, atHead: true, ...icons === undefined ? {} : { icons } };
   }
 
   async #read(): Promise<OverviewState> {

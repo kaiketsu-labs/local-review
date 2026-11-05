@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Local changes have their own review page. **Review local changes** in the new **Local** view shows your uncommitted changes and new files against HEAD with the same comment boxes, threads, Viewed marks and definition peeks as a PR. Comments still go to the Claude session you connected, and its replies appear in the thread. The page reads the files again when they change on disk.
-- The **Local** view replaces the **Review** view. It lists the repository's files with Git's change marks and each file's open comments. Clicking a file shows it on the review page; a file without changes appears whole, marked **Not changed**, until you **Close** it or while it has open threads.
+- The **Local** view replaces the **Review** view. It lists the repository's files with Git's change marks and each file's open comments. Clicking a file shows it on the review page. A file without changes opens whole in its own tab next to **Changes**, with its icon from your file icon theme and one column of line numbers, until you close the tab or while it has open threads.
 - **⌘⌥M / Ctrl+Alt+M** and **Comment in review page** in the editor's context menu open a comment on the selected lines on the review page, for local files and for files of a PR whose review page is open.
 - Removed: native inline comments in the editor, the side composer and its drafts, the `/a`, `/i` and `/r` prefixes, the Review view with its contrast and centered-layout actions, **Änderungen reviewen**, and the **An GitHub-PR übergeben** handoff. Use **Ask Claude** and **Implement** on the page. Existing local threads appear on the review page.
 - On a PR's review page, a Local thread on a file outside the diff opens that file in the editor.

@@ -40,15 +40,10 @@ export class LocalFilesView implements vscode.TreeDataProvider<Node>, vscode.Dis
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
-    const uri = vscode.Uri.file(join(this.root, node.kind === 'folder' ? node.folder.path : node.path));
-    if (node.kind === 'folder') {
-      const item = new vscode.TreeItem(node.folder.name, vscode.TreeItemCollapsibleState.Collapsed);
-      item.resourceUri = uri;
-      item.iconPath = vscode.ThemeIcon.Folder;
-      return item;
-    }
+    // Without a resource, folders get no theme icon, which would draw a second arrow next to the tree's own.
+    if (node.kind === 'folder') return new vscode.TreeItem(node.folder.name, vscode.TreeItemCollapsibleState.Collapsed);
     const item = new vscode.TreeItem(basename(node.path), vscode.TreeItemCollapsibleState.None);
-    item.resourceUri = uri;
+    item.resourceUri = vscode.Uri.file(join(this.root, node.path));
     item.iconPath = vscode.ThemeIcon.File;
     item.contextValue = 'pairReview.localFile';
     item.command = { command: 'pairReview.openLocalFile', title: 'Show on review page', arguments: [node.path] };
