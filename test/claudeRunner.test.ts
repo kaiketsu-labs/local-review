@@ -303,3 +303,12 @@ test('stop ends the running answer without an error and leaves its comments wait
   assert.equal(instance.activity.skipped, 1);
   assert.equal(children.length, 1);
 });
+
+test('leaves sent comments to the connected conversation when one answers them', async (t) => {
+  const { instance, store, children } = await runner('author', t, undefined, undefined, { answersElsewhere: true });
+  store.setPending([event('one')]);
+  instance.retry();
+  await new Promise((done) => setTimeout(done, 20));
+  assert.equal(children.length, 0);
+  assert.equal(instance.activity.running, false);
+});

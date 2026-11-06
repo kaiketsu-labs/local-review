@@ -331,6 +331,22 @@ export class ThemeIcon {
   static readonly Folder = new ThemeIcon('folder');
   constructor(readonly id: string, readonly color?: ThemeColor) {}
 }
+/** A glob under a folder, kept for watchers in tests. */
+export class RelativePattern { constructor(readonly base: string, readonly pattern: string) {} }
+
+/** File watcher whose events tests fire by hand. */
+export class FakeFileSystemWatcher {
+  readonly created = new EventEmitter<Uri>();
+  readonly changed = new EventEmitter<Uri>();
+  readonly deleted = new EventEmitter<Uri>();
+  readonly onDidCreate = this.created.event;
+  readonly onDidChange = this.changed.event;
+  readonly onDidDelete = this.deleted.event;
+  disposed = false;
+  constructor(readonly pattern: RelativePattern) {}
+  dispose(): void { this.disposed = true; }
+}
+
 export class FileDecoration { constructor(readonly badge?: string, readonly tooltip?: string, readonly color?: ThemeColor) {} }
 
 /** Sidebar entry supporting the metadata created by the real controller. */
@@ -457,6 +473,12 @@ export const workspace = {
   beforeConfigurationUpdate: undefined as (() => Promise<void>) | undefined,
   onDidOpenTextDocument: editorEvents.opened.event,
   onDidChangeTextDocument: editorEvents.changed.event,
+  watchers: [] as FakeFileSystemWatcher[],
+  createFileSystemWatcher(pattern: RelativePattern): FakeFileSystemWatcher {
+    const watcher = new FakeFileSystemWatcher(pattern);
+    workspace.watchers.push(watcher);
+    return watcher;
+  },
   fs: {
     /** Treat loaded source documents as existing local files in native controller tests. */
     async stat(uri: Uri): Promise<void> {
@@ -556,6 +578,8 @@ export const languages = {
 export const ViewColumn = { Active: -1, Beside: -2, One: 1 } as const;
 export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 } as const;
 export const ColorThemeKind = { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 } as const;
+/** Installed extensions, which tests fill with the contributions they read. */
+export const extensions = { all: [] as { readonly extensionPath: string; readonly packageJSON: unknown }[] };
 export const ProgressLocation = { Notification: 15 } as const;
 interface FakeTreeView {
   title: string;

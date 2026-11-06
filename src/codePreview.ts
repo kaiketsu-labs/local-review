@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import highlight from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
@@ -115,8 +116,25 @@ export interface EditorHighlighter {
 
 let editorHighlighter: EditorHighlighter | undefined;
 
+/** Editor-colored markup by file path and content, so reading the same files again skips highlighting; bounded by total length. */
+const highlighted = new Map<string, string>();
+let highlightedLength = 0;
+const maximumHighlightedLength = 64_000_000;
+
+function remember(key: string, html: string): void {
+  highlighted.set(key, html);
+  highlightedLength += html.length;
+  for (const [oldest, value] of highlighted) {
+    if (highlightedLength <= maximumHighlightedLength) break;
+    highlighted.delete(oldest);
+    highlightedLength -= value.length;
+  }
+}
+
 export function useEditorHighlighter(highlighter: EditorHighlighter | undefined): void {
   editorHighlighter = highlighter;
+  highlighted.clear();
+  highlightedLength = 0;
 }
 
 /** Load what `codePreviewHtml` needs to color these files like the editor. */
@@ -127,9 +145,19 @@ export async function prepareHighlighting(filePaths: readonly string[]): Promise
 /** Highlight bounded, known source languages using escaped, allowlisted markup only. */
 export function codePreviewHtml(code: string, filePath: string): string {
   if (code.length > 200_000) return escapeCode(code);
+  const key = createHash('sha1').update(filePath).update('\0').update(code).digest('base64');
+  const known = highlighted.get(key);
+  if (known !== undefined) {
+    highlighted.delete(key);
+    highlighted.set(key, known);
+    return known;
+  }
   try {
     const editor = editorHighlighter?.highlight(code, filePath);
-    if (editor !== undefined && safeMarkup(editor, code)) return editor;
+    if (editor !== undefined && safeMarkup(editor, code)) {
+      remember(key, editor);
+      return editor;
+    }
   } catch {
     // highlight.js below still colors the file.
   }

@@ -1,7 +1,9 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { capturedCodeContext } from './anchors.js';
 import { codePreviewHtml, escapeCode, prepareHighlighting } from './codePreview.js';
+import type { CodeAnchor } from './contracts.js';
 import { git } from './worktrees.js';
 
 export interface DiffLine {
@@ -20,13 +22,16 @@ export interface DiffHunk {
 export interface FileDiff {
   readonly path: string;
   readonly oldPath?: string;
-  readonly change: 'added' | 'modified' | 'deleted' | 'renamed';
+  /** `unchanged` is a file shown whole for review, its lines all context. */
+  readonly change: 'added' | 'modified' | 'deleted' | 'renamed' | 'unchanged';
   readonly binary: boolean;
   readonly additions: number;
   readonly deletions: number;
   readonly hunks: readonly DiffHunk[];
   /** Marked `linguist-generated` or a well-known lockfile or bundle, which GitHub folds by default. */
   readonly generated?: true;
+  /** Only the code saved with its comments, since the file no longer exists. */
+  readonly saved?: true;
 }
 
 /** Which changes to read: `to` ends at a commit instead of the worktree, `ignoreWhitespace` leaves out whitespace-only changes. */
@@ -255,6 +260,39 @@ function fromWholeFile(side: readonly RawLine[], lineNumber: (line: RawLine) => 
 /** A whole file's lines, highlighted, for showing context the diff left out. */
 export function highlightSource(text: string, filePath: string): readonly string[] {
   return highlightLines((text.endsWith('\n') ? text.slice(0, -1) : text).split('\n'), filePath);
+}
+
+/** A file outside `git diff` as one hunk: every line added for a new untracked file, or every line context for an unchanged one. */
+export function wholeFileDiff(path: string, content: Buffer, change: 'added' | 'unchanged'): FileDiff {
+  const empty = { path, change, additions: 0, deletions: 0, hunks: [] };
+  if (content.includes(0)) return { ...empty, binary: true };
+  const text = content.toString('utf8');
+  if (text === '') return { ...empty, binary: false };
+  const html = highlightSource(text, path);
+  const kind = change === 'added' ? 'add' : 'context';
+  const lines = html.map((line, index): DiffLine => ({ kind, ...change === 'added' ? {} : { oldLine: index + 1 }, newLine: index + 1, html: line }));
+  const header = change === 'added' ? `@@ -0,0 +1,${lines.length} @@` : `@@ -1,${lines.length} +1,${lines.length} @@`;
+  return { ...empty, binary: false, additions: change === 'added' ? lines.length : 0, hunks: [{ header, lines }] };
+}
+
+/** A file that no longer exists, shown as the code saved with each comment at its original line numbers; overlapping excerpts keep the first. */
+export function savedCodeDiff(path: string, anchors: readonly CodeAnchor[]): FileDiff {
+  const excerpts = anchors.map((anchor) => {
+    const { text, startLine } = capturedCodeContext(anchor);
+    const lines = highlightSource(text.replace(/\n$/u, ''), path);
+    return { firstLine: anchor.startLine - startLine + 1, lines };
+  }).sort((a, b) => a.firstLine - b.firstLine);
+  const hunks: DiffHunk[] = [];
+  let next = 1;
+  for (const { firstLine, lines } of excerpts) {
+    if (firstLine < next) continue;
+    next = firstLine + lines.length;
+    hunks.push({
+      header: `@@ -${firstLine},${lines.length} +${firstLine},${lines.length} @@`,
+      lines: lines.map((html, index): DiffLine => ({ kind: 'context', oldLine: firstLine + index, newLine: firstLine + index, html })),
+    });
+  }
+  return { path, change: 'unchanged', saved: true, binary: false, additions: 0, deletions: 0, hunks };
 }
 
 /** Highlight consecutive lines together, then cut the markup at line breaks. */

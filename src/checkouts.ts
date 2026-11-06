@@ -85,6 +85,14 @@ export class Checkouts implements ReviewSessionSource, vscode.Disposable {
     return found;
   }
 
+  /** The checkout of the repository a folder belongs to, such as one of its worktrees; undefined outside a Git repository. */
+  async forFolder(folder: string): Promise<Checkout | undefined> {
+    const storageRoot = await this.#storageOf(folder);
+    if (storageRoot === undefined) return undefined;
+    await this.list();
+    return this.#byStorage.get(storageRoot) ?? this.#checkout(folder, storageRoot);
+  }
+
   /** Session that owns a PR file document, if it is open. */
   forUri(uri: vscode.Uri): PullRequestSession | undefined {
     for (const checkout of this.#byStorage.values()) {

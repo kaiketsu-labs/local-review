@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { codePreviewHtml } from '../src/codePreview.js';
+import { codePreviewHtml, useEditorHighlighter } from '../src/codePreview.js';
 
 /** Recover preview source after removing only generated span markup. */
 function sourceText(html: string): string {
@@ -57,5 +57,23 @@ test('large source and incomplete selections stay intact without blocking on syn
   assert.equal(sourceText(html), large);
   for (const code of ['', '@field_validator("days")', 'def validate(', '    """unfinished', '𝛑 = "🦆"\r\n']) {
     assert.equal(sourceText(codePreviewHtml(code, 'snippet.py')), code);
+  }
+});
+
+test('colors the same code once until the theme changes', () => {
+  let calls = 0;
+  const highlighter = { prepare: async () => undefined, styles: () => '', highlight: (code: string) => { calls++; return `<span class="tm-ff0000">${code}</span>`; } };
+  useEditorHighlighter(highlighter);
+  try {
+    assert.equal(codePreviewHtml('let', 'a.ts'), '<span class="tm-ff0000">let</span>');
+    assert.equal(codePreviewHtml('let', 'a.ts'), '<span class="tm-ff0000">let</span>');
+    assert.equal(calls, 1);
+    codePreviewHtml('let', 'b.py');
+    assert.equal(calls, 2);
+    useEditorHighlighter(highlighter);
+    codePreviewHtml('let', 'a.ts');
+    assert.equal(calls, 3);
+  } finally {
+    useEditorHighlighter(undefined);
   }
 });

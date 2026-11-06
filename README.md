@@ -11,8 +11,8 @@
 
 <p align="center">
   <b>Review local changes with Claude, right where you read the code.</b><br>
-  Leave a comment in VS Code. Ask a question or request a change.<br>
-  Claude receives it automatically and replies in the same inline conversation.
+  Leave a comment on the review page. Ask a question or request a change.<br>
+  Claude receives it automatically and replies in the same thread.
 </p>
 
 <p align="center">
@@ -32,23 +32,20 @@ Pair Review brings that conversation into the editor: **feedback attached to a l
 
 <p align="center">
   <a href="https://github.com/kaiketsu-labs/pair-review/blob/main/docs/media/pair-review-demo.mp4"><img src="https://raw.githubusercontent.com/kaiketsu-labs/pair-review/main/docs/media/pair-review-poster.jpg" alt="Watch the Pair Review walkthrough" width="840"></a>
-  <br><sub>Staged demo with simulated responses and the optional side composer. The default input uses native inline comments.</sub>
+  <br><sub>Staged demo of an earlier version, with simulated responses and native inline comments. Comments now live on the review page.</sub>
 </p>
 
 ## Features
 
 | | |
 | --- | --- |
-| 💬 **Review at the line** | Native inline comments in local files and diffs, with captured code context attached to each submitted comment. |
+| 💬 **Review at the line** | The review page shows your uncommitted changes, new files and any file you open from the **Local** view, with comment threads on their lines. |
 | ⚡ **Automatic delivery** | Send feedback once; your connected Claude conversation receives it without a separate review submission. |
-| 🎛️ **Ask, implement, summarize** | Use `/a` to discuss, `/i` to request a change, and `/r` to summarize the thread. |
-| 🎨 **Readable code** | Padded code cards, syntax colors and a small editor icon for opening the source with native navigation. |
-| 📌 **Keep your draft** | An optional compact side composer follows new selections while empty and keeps written feedback attached to its original code. |
+| 🎛️ **Ask or implement** | **Ask Claude** discusses the lines; **Implement** asks Claude to change them. |
 | ✅ **You resolve it** | Claude reports progress and replies. You decide when a thread is done; completed threads can be reopened. |
 | 🔁 **Choose your conversation** | Search saved conversations by name or branch, start a new one, or connect the conversation already running in your terminal. |
 | 🧭 **Guided PR review** | Claude groups a PR's changes by severity, orders them for reading and explains each step. Every change lands in one step, so ticking Viewed on each step covers the whole PR. The Pull Requests sidebar lists the steps under the PR; click one to jump to it. |
 | 🐙 **The whole GitHub PR** | The review page covers GitHub's PR tabs: conversation with comments, reviews, reactions, edits and events; commits with per-commit diffs and changes since your last review; file filters and hidden whitespace; check annotations and re-runs; and a merge box with branch protection, update branch, auto-merge, merge queue and revert. |
-| 🔗 **Carry it into a PR** | Preview summaries and unresolved questions, edit the text, then explicitly publish to the branch's existing GitHub PR. |
 | 🎙️ **Speak your feedback** | Use existing macOS Dictation in the comment field, without an extra recorder or transcription account. |
 
 ## The review loop
@@ -57,23 +54,20 @@ Pair Review brings that conversation into the editor: **feedback attached to a l
 flowchart LR
     A["🔎 Read the local diff"] --> B["💬 Comment on a line"]
     B --> C{"Your intent"}
-    C -->|"/a"| D["Discuss the code"]
-    C -->|"/i"| E["Request a change"]
-    C -->|"/r"| F["Summarize the thread"]
-    D & E & F --> G["Claude replies inline"]
+    C -->|"Ask Claude"| D["Discuss the code"]
+    C -->|"Implement"| E["Request a change"]
+    D & E --> G["Claude replies in the thread"]
     G --> H["Review and continue"]
     H --> B
     H --> I["✓ Resolve when satisfied"]
-    H -. "Separate action" .-> J["Preview → Publish to PR"]
 ```
 
-| Write | Result |
+| Choose | Result |
 | --- | --- |
-| `/a Why use a fixed delay here?` | Claude explains the decision in the thread. |
-| `/i Add a timeout for each attempt.` | Claude implements the requested change and returns it for review. |
-| `/r` | Claude summarizes the existing conversation and remaining decisions. |
+| **Ask Claude** · "Why use a fixed delay here?" | Claude explains the decision in the thread. |
+| **Implement** · "Add a timeout for each attempt." | Claude implements the requested change and returns it for review. |
 
-`/a` and `/r` request discussion without edits; they are not a separate permission sandbox. Claude's existing tool permissions still apply. `/r` never publishes anything to GitHub.
+**Ask Claude** requests discussion without edits; it is not a separate permission sandbox. Claude's existing tool permissions still apply.
 
 ## Install
 
@@ -89,13 +83,16 @@ code --install-extension ./pair-review-<version>.vsix --force
 
 **Connect Claude**
 
-Open a trusted local Git repository and run **Pair Review: Mit Claude verbinden**.
+Open a trusted local Git repository, click **Review local changes** in the **Local** view, then **Connect Claude** on the review page.
 
 | Choose | What happens |
 | --- | --- |
-| **Unterhaltung auswählen** | Search this project's recent conversations by name or branch. Running conversations are marked **Läuft**. |
-| **Neue Unterhaltung** | Start a fresh Claude conversation with review feedback enabled. |
-| **Laufende Unterhaltung verbinden** | Keep your original Claude process and conversation. Copy the two commands shown in VS Code into that conversation. |
+| **New conversation** | Start a fresh Claude conversation in a VS Code terminal, with review feedback enabled. |
+| **Resume a conversation…** | Search this project's recent conversations by name or branch. Running conversations are marked **Running**. |
+| **Connect running Claude** | Keep your original Claude process and conversation. Run the two commands the menu shows in that conversation. |
+| **Copy command** | Copy a start command for a terminal outside VS Code. |
+
+Once connected, the button reads **Open in terminal** and the same menu switches conversations. Without a review page open, **Pair Review: Mit Claude verbinden** in the Command Palette offers the same choices.
 
 To connect a running conversation, execute `/reload-plugins --force`, then `/pair-review:connect` inside it. This requires **Claude Code 2.1.280+** and installs a project-local plugin; reloading rereads the conversation context once. Wait for **Feedback aktiv** before sending a comment.
 
@@ -103,7 +100,7 @@ For a separate terminal app, the same running-conversation commands apply. To st
 
 **Leave your first comment**
 
-Open **Pair Review: Änderungen reviewen**, click the gutter **+**, or select code and press **⌘⌥M** on macOS / **Ctrl+Alt+M** on Linux. Write `/a` or `/i` followed by your feedback and choose **Senden**. Continue in the thread's reply field.
+Open the **Local** view in the Pair Review sidebar and click **Review local changes**. On the review page, click a line number, write your feedback and choose **Ask Claude** or **Implement**. Continue in the thread's **Reply**. Clicking a file in the **Local** view shows it on the page, even without changes. With several checkouts, such as Git worktrees of the same repository, the **Local** view lists each one; every checkout gets its own review page tab and its own Claude conversation.
 
 Requires **VS Code 1.100+**, **Node.js 20+**, **Git**, and authenticated **Claude Code with `asyncRewake` support**. macOS is the verified primary platform; Linux is unverified, and automatic Windows connection is not supported yet. [Setup and troubleshooting →](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/INSTALL.md)
 
@@ -119,7 +116,7 @@ sequenceDiagram
     VS->>Local: Save feedback and immutable code context
     Local-->>Claude: Wake with the submitted feedback
     Claude->>Local: Acknowledge the event
-    Claude->>Claude: Answer or implement according to /a, /i or /r
+    Claude->>Claude: Answer or implement, as you asked
     Claude->>Local: Reply to the original thread
     Local-->>VS: Show the reply and progress
     You->>VS: Continue the discussion or resolve ✓
@@ -133,22 +130,18 @@ Threads and private connection files live in VS Code's workspace storage. The la
 
 | Action / setting | Effect |
 | --- | --- |
-| **Kommentarfenster hervorheben** | Apply a distinct thread surface, reply fill and neutral border in this project. The paired reset action restores prior colors. VS Code shares these tokens with other comments and Peek views. |
-| **Zentrierte Ansicht** | Narrow the source editor and its inline conversations together. VS Code controls native comment width. |
-| **Feedback in Seitenansicht schreiben** | Open the optional compact composer with mode buttons, saved drafts and selection following. |
 | `pairReview.claudePath` | Choose your Claude executable when multiple installations exist. |
 | `pairReview.nodePath` | Choose the Node.js 20+ executable used by the integration. |
 | `pairReview.transport` | `hooks` is the default. `channels` is an experimental alternative with additional prerequisites. |
 
-The interface currently uses German labels. Code previews provide display colors; use the editor icon for hover, references and language-server navigation. [Full usage guide →](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/USAGE.md)
+Some labels are still German. On the review page, Cmd/Ctrl-click a name to peek at its definition, or use **Open in editor**. [Full usage guide →](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/USAGE.md)
 
 ## Roadmap and verification
 
-- [x] Native inline questions, change requests and thread summaries
+- [x] Questions and change requests on the review page, for local changes and PRs
 - [x] Automatic feedback delivery and replies to the original thread
 - [x] Specific saved conversation or new conversation
 - [x] Human resolution, hidden completed threads and reopening
-- [x] Editable preview before publishing to an existing PR
 - [x] Connect to an already-running conversation without restarting it
 - [x] Unread reply navigation and direct Claude-to-thread navigation
 - [ ] VS Code Marketplace / Open VSX publication
@@ -156,7 +149,7 @@ The interface currently uses German labels. Code previews provide display colors
 
 Guide notes are stored as threads that start with Claude's message. Versions before guided review cannot load a PR's comments once it has a guide.
 
-The [running-conversation verification](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/QA-2026-10-26.md) records an authenticated Claude session started before setup, unchanged process/session identity after connecting, and a real inline question and formatted reply. Strict TypeScript and **256 tests** pass. Busy-agent delivery, a full separate-terminal roundtrip and real remote PR publication remain separate verification tasks. [Earlier native review](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/UX-REVIEW-2026-10-21.md) · [Review tracker](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/REVIEW.md)
+The [running-conversation verification](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/QA-2026-10-26.md) records an authenticated Claude session started before setup, unchanged process/session identity after connecting, and a real inline question and formatted reply. Strict TypeScript and **273 tests** pass. Busy-agent delivery, a full separate-terminal roundtrip and real remote PR publication remain separate verification tasks. [Earlier native review](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/UX-REVIEW-2026-10-21.md) · [Review tracker](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/REVIEW.md)
 
 ## Development
 
@@ -179,6 +172,6 @@ npm run package
 
 The generated `.vsix` can be installed through VS Code. `make install` packages it and installs it in one step; `make` lists the other targets. [Contributing](https://github.com/kaiketsu-labs/pair-review/blob/main/CONTRIBUTING.md) · [Publishing guide](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/PUBLISHING.md)
 
-Built on the [VS Code Comments API](https://code.visualstudio.com/api/references/vscode-api#CommentController), [Claude hooks](https://code.claude.com/docs/en/hooks), and [MCP](https://code.claude.com/docs/en/mcp). Not affiliated with Anthropic or Microsoft.
+Built on [VS Code webviews](https://code.visualstudio.com/api/extension-guides/webview), [Claude hooks](https://code.claude.com/docs/en/hooks), and [MCP](https://code.claude.com/docs/en/mcp). Not affiliated with Anthropic or Microsoft.
 
 The [PR management reliability review](https://github.com/kaiketsu-labs/pair-review/blob/main/docs/QA-PR-MANAGEMENT-2026-11-03.md) records partial-write recovery fixes, 364 passing automated tests, and the still-pending real GitHub and native VS Code verification.

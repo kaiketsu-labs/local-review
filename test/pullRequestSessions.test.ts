@@ -12,12 +12,10 @@ import { pullRequestFileUri } from '../src/pullRequestDiff.js';
 import type { PullRequestComment, PullRequestProvider, PullRequestSummary } from '../src/pullRequests.js';
 import { readPublications } from '../src/pullRequestComments.js';
 import { PullRequestSessions } from '../src/pullRequestSessions.js';
-import { createReviewController } from '../src/reviewController.js';
-import { createReviewStore } from '../src/store.js';
+import { anchorFromText } from '../src/anchors.js';
 import { ensureWorktree, readPullRequestBase, reviewDataPath } from '../src/worktrees.js';
 import {
-  commands, comments, extensionContext, FakeInteractiveEditor, FakeTextDocument, resetFakeEditor, resetFakeWindow,
-  Selection, settle, Uri, window, workspace,
+  commands, extensionContext, resetFakeEditor, resetFakeWindow, Uri, window,
 } from './fakes/vscode.js';
 
 const executeFile = promisify(execFile);
@@ -99,9 +97,8 @@ async function fixture(): Promise<{ source: string; storage: string; worktree: s
   return { source, storage, worktree, context };
 }
 
-test('stores a comment on a PR file in that PR\'s own review, anchored to the PR base', async () => {
+test('sends a PR comment to that PR\'s Claude and publishes it to GitHub', async () => {
   const { source, storage, worktree, context } = await fixture();
-  const local = await createReviewStore(path.join(storage, 'pair-review.json'), source);
   const started: string[] = [];
   const sessions = new PullRequestSessions(context, storage, source, connect, {
     resolve: async () => ({ executable: '/bin/claude', mcpPath: '/data/mcp.json' }),
@@ -112,46 +109,30 @@ test('stores a comment on a PR file in that PR\'s own review, anchored to the PR
   });
   cleanup.push(async () => { sessions.dispose(); });
   const opened = await sessions.open('acme/app', 5);
-  const controller = await createReviewController(local, context, async () => undefined, sessions);
-  cleanup.push(async () => { controller.dispose(); });
-
   const uri = pullRequestFileUri({ repository: 'acme/app', number: 5, relativePath: 'feature.ts' });
-  const document = new FakeTextDocument(uri as unknown as Uri, 'export const feature = 1;\n', 'typescript');
-  workspace.textDocuments.push(document);
-  const editor = new FakeInteractiveEditor(document);
-  editor.selection = new Selection(0, 0, 0, 10);
-  window.visibleTextEditors.push(editor);
-  window.activeTextEditor = editor;
   assert.equal(sessions.forUri(uri)?.session, opened.session);
 
-  await commands.executeCommand('pairReview.addComment');
-  const draft = comments.controllers[0]?.threads.at(-1);
-  assert.ok(draft !== undefined);
-  await commands.executeCommand('pairReview.submitInline', { thread: draft, text: '/a Why is this exported?' });
+  const base = await readPullRequestBase(worktree, 'main');
+  assert.ok(base !== undefined);
+  const anchor = anchorFromText('export const feature = 1;\n', { path: 'feature.ts', startLine: 1, endLine: 1, side: 'working', baseRevision: base });
+  const thread = await opened.session.store.submit(anchor, 'Why is this exported?', 'ask');
   await opened.session.store.flush();
-  await settle();
-
-  assert.equal(local.threads.length, 0);
-  const [thread] = opened.session.store.threads;
-  assert.equal(thread?.anchor.path, 'feature.ts');
-  assert.equal(thread?.anchor.side, 'working');
-  assert.equal(thread?.anchor.baseRevision, await readPullRequestBase(worktree, 'main'));
   assert.equal(opened.session.store.pendingEvents.length, 1);
   assert.equal(opened.bridge.descriptor.workspaceRoot, worktree);
   for (let wait = 0; started.length === 0 && wait < 100; wait += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(started, [worktree]);
 
-  assert.ok(thread !== undefined);
-  await commands.executeCommand('pairReview.publishThread', thread.id);
+  const publishing = opened.session.publish?.(thread.id);
+  await until(() => window.panels.length > 0);
   const panel = window.panels.at(-1);
   assert.ok(panel?.webview.html.includes('Why is this exported?'));
   panel?.receive({ body: 'Why is this exported?', pending: true });
+  await publishing;
   await until(() => opened.session.publication?.(thread.id) !== undefined);
   assert.equal(published[0]?.pending, true);
   assert.deepEqual({ ...published[0]?.comment, commitId: undefined }, { path: 'feature.ts', side: 'RIGHT', lines: { start: 1, end: 1 }, body: 'Why is this exported?', commitId: undefined });
   assert.equal(panel?.disposed, true);
   assert.deepEqual(await readPublications(reviewDataPath(worktree)), new Map([[thread.id, { url: 'https://github.com/acme/app/pull/5#discussion_r1', pending: true }]]));
-  assert.match(comments.controllers[0]?.threads.find((native) => native.contextValue?.endsWith('.published'))?.label ?? '', /On GitHub \(pending\)/u);
   await stat(path.join(reviewDataPath(worktree), 'review.json'));
   await stat(path.join(reviewDataPath(worktree), 'connection.json'));
 });

@@ -1,7 +1,7 @@
 {
   "name": "pair-review",
   "displayName": "Pair Review",
-  "description": "Review local changes with Claude Code using native inline comments and automatic feedback delivery.",
+  "description": "Review local changes and GitHub pull requests with Claude Code on one review page, with automatic feedback delivery.",
   "version": "0.4.12",
   "icon": "resources/icon.png",
   "galleryBanner": {
@@ -43,7 +43,8 @@
   "activationEvents": [
     "onStartupFinished",
     "onView:pairReview.pullRequests",
-    "onFileSystem:pair-review-pr"
+    "onFileSystem:pair-review-pr",
+    "onView:pairReview.local"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -122,111 +123,27 @@
         "icon": "$(plug)"
       },
       {
-        "command": "pairReview.addComment",
-        "title": "Kommentar hinzufügen",
-        "category": "Pair Review",
-        "icon": "$(comment-add)"
-      },
-      {
-        "command": "pairReview.openComposer",
-        "title": "Feedback in Seitenansicht schreiben",
-        "category": "Pair Review",
-        "icon": "$(open-preview)"
-      },
-      {
-        "command": "pairReview.openCode",
-        "title": "Code im Editor öffnen",
-        "category": "Pair Review",
-        "icon": "$(go-to-file)"
-      },
-      {
-        "command": "pairReview.openCommentCode",
-        "title": "Code im Editor öffnen",
-        "category": "Pair Review",
-        "icon": "$(go-to-file)"
-      },
-      {
-        "command": "pairReview.submitInline",
-        "title": "Senden",
-        "category": "Pair Review",
-        "enablement": "!commentIsEmpty"
-      },
-      {
-        "command": "pairReview.cancelDraft",
-        "title": "Entwurf verwerfen",
-        "category": "Pair Review",
-        "icon": "$(close)"
-      },
-      {
-        "command": "pairReview.openChanges",
-        "title": "Änderungen reviewen",
+        "command": "pairReview.openLocalReview",
+        "title": "Review local changes",
         "category": "Pair Review",
         "icon": "$(git-compare)"
       },
       {
-        "command": "pairReview.revealThread",
-        "title": "Zum Kommentar springen",
+        "command": "pairReview.openLocalFile",
+        "title": "Show on review page",
         "category": "Pair Review"
       },
       {
-        "command": "pairReview.composeReply",
-        "title": "In Seitenansicht antworten",
+        "command": "pairReview.openLocalFileInEditor",
+        "title": "Open in editor",
         "category": "Pair Review",
-        "icon": "$(open-preview)"
+        "icon": "$(go-to-file)"
       },
       {
-        "command": "pairReview.resumeDraft",
-        "title": "Entwurf fortsetzen",
+        "command": "pairReview.refreshLocalFiles",
+        "title": "Refresh files",
         "category": "Pair Review",
-        "icon": "$(edit)"
-      },
-      {
-        "command": "pairReview.exportToPr",
-        "title": "An GitHub-PR übergeben",
-        "category": "Pair Review",
-        "icon": "$(git-pull-request)"
-      },
-      {
-        "command": "pairReview.resolve",
-        "title": "Als erledigt markieren",
-        "category": "Pair Review",
-        "icon": "$(check)"
-      },
-      {
-        "command": "pairReview.showResolved",
-        "title": "Erledigte anzeigen",
-        "category": "Pair Review",
-        "icon": "$(eye)"
-      },
-      {
-        "command": "pairReview.hideResolved",
-        "title": "Erledigte ausblenden",
-        "category": "Pair Review",
-        "icon": "$(eye-closed)"
-      },
-      {
-        "command": "pairReview.enhanceContrast",
-        "title": "Kommentarfenster hervorheben",
-        "category": "Pair Review",
-        "icon": "$(color-mode)"
-      },
-      {
-        "command": "pairReview.toggleCenteredLayout",
-        "title": "Zentrierte Ansicht",
-        "category": "Pair Review",
-        "icon": "$(layout-centered)"
-      },
-      {
-        "command": "pairReview.resetContrast",
-        "title": "Standarddarstellung wiederherstellen",
-        "category": "Pair Review",
-        "icon": "$(discard)"
-      },
-      {
-        "command": "pairReview.reopen",
-        "title": "Wieder öffnen",
-        "category": "Pair Review",
-        "icon": "$(debug-restart)"
+        "icon": "$(refresh)"
       },
       {
         "command": "pairReview.refreshPullRequests",
@@ -359,16 +276,16 @@
         "icon": "$(dashboard)"
       },
       {
-        "command": "pairReview.publishThread",
-        "title": "Publish to GitHub",
+        "command": "pairReview.filterLocal",
+        "title": "Filter checkouts",
         "category": "Pair Review",
-        "icon": "$(cloud-upload)"
+        "icon": "$(filter)"
       },
       {
-        "command": "pairReview.openPublishedThread",
-        "title": "Open on GitHub",
+        "command": "pairReview.filterLocalActive",
+        "title": "Filter checkouts",
         "category": "Pair Review",
-        "icon": "$(github)"
+        "icon": "$(filter-filled)"
       }
     ],
     "viewsContainers": {
@@ -388,8 +305,8 @@
           "icon": "resources/review.svg"
         },
         {
-          "id": "pairReview.threads",
-          "name": "Review",
+          "id": "pairReview.local",
+          "name": "Local",
           "icon": "resources/review.svg"
         },
         {
@@ -402,8 +319,9 @@
     },
     "viewsWelcome": [
       {
-        "view": "pairReview.threads",
-        "contents": "Feedback direkt an Claude Code.\n[Mit Claude verbinden](command:pairReview.startClaude)\n[Änderungen reviewen](command:pairReview.openChanges)\nMarkiere Code und füge einen Kommentar hinzu. Abgeschickte Kommentare werden automatisch zugestellt."
+        "view": "pairReview.local",
+        "contents": "Open a Git repository to review its local changes with Claude.",
+        "when": "!pairReview.localAvailable"
       },
       {
         "view": "pairReview.pullRequests",
@@ -417,28 +335,40 @@
       }
     ],
     "menus": {
-      "editor/context": [
-        {
-          "command": "pairReview.addComment",
-          "when": "(resourceScheme == file || resourceScheme == pair-review-base || resourceScheme == pair-review-pr) && isWorkspaceTrusted",
-          "group": "navigation@20"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "pairReview.addComment",
-          "when": "(resourceScheme == file || resourceScheme == pair-review-base || resourceScheme == pair-review-pr) && isWorkspaceTrusted",
-          "group": "navigation@20"
-        }
-      ],
-      "scm/title": [
-        {
-          "command": "pairReview.openChanges",
-          "when": "scmProvider == git",
-          "group": "navigation@20"
-        }
-      ],
       "view/title": [
+        {
+          "command": "pairReview.openLocalReview",
+          "when": "view == pairReview.local && pairReview.localAvailable",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pairReview.startClaude",
+          "when": "view == pairReview.local",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pairReview.filterLocal",
+          "when": "view == pairReview.local && pairReview.localAvailable && !pairReview.localFiltered",
+          "group": "navigation@2.5"
+        },
+        {
+          "command": "pairReview.filterLocalActive",
+          "when": "view == pairReview.local && pairReview.localFiltered",
+          "group": "navigation@2.5"
+        },
+        {
+          "command": "pairReview.refreshLocalFiles",
+          "when": "view == pairReview.local && pairReview.localAvailable",
+          "group": "navigation@3"
+        },
+        {
+          "command": "pairReview.copyClaudeCommand",
+          "when": "view == pairReview.local"
+        },
+        {
+          "command": "pairReview.connectRunningClaude",
+          "when": "view == pairReview.local"
+        },
         {
           "command": "pairReview.searchPullRequests",
           "when": "view == pairReview.pullRequests",
@@ -493,51 +423,6 @@
           "command": "pairReview.groupByRole",
           "when": "view == pairReview.pullRequests && !pairReview.groupByRole",
           "group": "2_grouping@1"
-        },
-        {
-          "command": "pairReview.startClaude",
-          "when": "view == pairReview.threads",
-          "group": "navigation@1"
-        },
-        {
-          "command": "pairReview.copyClaudeCommand",
-          "when": "view == pairReview.threads",
-          "group": "connection@1"
-        },
-        {
-          "command": "pairReview.openChanges",
-          "when": "view == pairReview.threads",
-          "group": "navigation@2"
-        },
-        {
-          "command": "pairReview.exportToPr",
-          "when": "view == pairReview.threads",
-          "group": "navigation@3"
-        },
-        {
-          "command": "pairReview.showResolved",
-          "when": "view == pairReview.threads && !pairReview.showResolved",
-          "group": "navigation@4"
-        },
-        {
-          "command": "pairReview.hideResolved",
-          "when": "view == pairReview.threads && pairReview.showResolved",
-          "group": "navigation@4"
-        },
-        {
-          "command": "pairReview.enhanceContrast",
-          "when": "view == pairReview.threads",
-          "group": "navigation@5"
-        },
-        {
-          "command": "pairReview.toggleCenteredLayout",
-          "when": "view == pairReview.threads",
-          "group": "appearance@1"
-        },
-        {
-          "command": "pairReview.resetContrast",
-          "when": "view == pairReview.threads",
-          "group": "appearance@2"
         }
       ],
       "view/item/context": [
@@ -550,6 +435,11 @@
           "command": "pairReview.unpinPullRequest",
           "when": "view == pairReview.pullRequests && viewItem =~ /^pairReview\\.pullRequest.*\\.pinned$/",
           "group": "inline@0"
+        },
+        {
+          "command": "pairReview.openLocalFileInEditor",
+          "when": "view == pairReview.local && viewItem == pairReview.localFile",
+          "group": "inline"
         },
         {
           "command": "pairReview.markGuideGroupRead",
@@ -582,70 +472,9 @@
           "group": "1_pullRequest@0"
         },
         {
-          "command": "pairReview.resolve",
-          "when": "view == pairReview.threads && viewItem =~ /^pairReview\\.open/",
-          "group": "inline@1"
-        },
-        {
-          "command": "pairReview.reopen",
-          "when": "view == pairReview.threads && viewItem =~ /^pairReview\\.resolved/",
-          "group": "inline@1"
-        },
-        {
-          "command": "pairReview.publishThread",
-          "when": "view == pairReview.threads && viewItem =~ /\\.publishable$/",
-          "group": "inline@0"
-        },
-        {
-          "command": "pairReview.openPublishedThread",
-          "when": "view == pairReview.threads && viewItem =~ /\\.published$/",
-          "group": "inline@0"
-        }
-      ],
-      "comments/commentThread/context": [
-        {
-          "command": "pairReview.submitInline",
-          "when": "commentController == pairReview",
-          "group": "inline@1"
-        }
-      ],
-      "comments/comment/title": [
-        {
-          "command": "pairReview.openCommentCode",
-          "when": "commentController == pairReview && comment == pairReview.code",
-          "group": "inline@1"
-        }
-      ],
-      "comments/commentThread/title": [
-        {
-          "command": "pairReview.cancelDraft",
-          "when": "commentController == pairReview && commentThreadIsEmpty",
-          "group": "inline@1"
-        },
-        {
-          "command": "pairReview.composeReply",
-          "when": "commentController == pairReview && commentThread =~ /^pairReview\\.open/",
-          "group": "navigation@1"
-        },
-        {
-          "command": "pairReview.publishThread",
-          "when": "commentController == pairReview && commentThread =~ /\\.publishable$/",
-          "group": "inline@1"
-        },
-        {
-          "command": "pairReview.openPublishedThread",
-          "when": "commentController == pairReview && commentThread =~ /\\.published$/",
-          "group": "inline@1"
-        },
-        {
-          "command": "pairReview.resolve",
-          "when": "commentController == pairReview && commentThread =~ /^pairReview\\.open/",
-          "group": "inline@2"
-        },
-        {
-          "command": "pairReview.reopen",
-          "when": "commentController == pairReview && commentThread =~ /^pairReview\\.resolved/",
-          "group": "inline@1"
+          "command": "pairReview.openLocalReview",
+          "when": "view == pairReview.local && viewItem == pairReview.checkout",
+          "group": "inline"
         }
       ],
       "commandPalette": [
@@ -686,67 +515,23 @@
           "when": "false"
         },
         {
-          "command": "pairReview.publishThread",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.openPublishedThread",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.openCode",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.openCommentCode",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.submitInline",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.cancelDraft",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.composeReply",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.showResolved",
-          "when": "!pairReview.showResolved"
-        },
-        {
-          "command": "pairReview.hideResolved",
-          "when": "pairReview.showResolved"
-        },
-        {
-          "command": "pairReview.resolve",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.reopen",
-          "when": "false"
-        },
-        {
-          "command": "pairReview.revealThread",
-          "when": "false"
-        },
-        {
           "command": "pairReview.hideRepository",
+          "when": "false"
+        },
+        {
+          "command": "pairReview.openLocalFile",
+          "when": "false"
+        },
+        {
+          "command": "pairReview.openLocalFileInEditor",
+          "when": "false"
+        },
+        {
+          "command": "pairReview.filterLocalActive",
           "when": "false"
         }
       ]
     },
-    "keybindings": [
-      {
-        "command": "pairReview.addComment",
-        "key": "ctrl+alt+m",
-        "mac": "cmd+alt+m",
-        "when": "editorTextFocus && (resourceScheme == file || resourceScheme == pair-review-base)"
-      }
-    ],
     "configuration": {
       "title": "Pair Review",
       "properties": {

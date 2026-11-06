@@ -54,6 +54,12 @@ export async function syncKeepingLocalCommits(worktree: string, number: number):
   return { head, ahead: false };
 }
 
+/** The PR's latest commit on GitHub, fetched without moving the checkout. */
+export async function fetchPullRequestHead(folder: string, number: number): Promise<string> {
+  await git(folder, ['fetch', '--quiet', 'origin', `pull/${number}/head`]);
+  return (await git(folder, ['rev-parse', 'FETCH_HEAD'])).trim();
+}
+
 /** Commit files of a PR worktree without pushing. `hooksOff` skips Git hooks, for someone else's PR. */
 export async function commitFiles(worktree: string, { path, message, hooksOff }: { readonly path: string | readonly string[]; readonly message: string; readonly hooksOff: boolean }): Promise<void> {
   const paths = typeof path === 'string' ? [path] : path;

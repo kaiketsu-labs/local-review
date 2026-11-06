@@ -4,65 +4,55 @@
 
 ### Review local code. Give Claude feedback where it belongs.
 
-GitHub-style review conversations, directly in VS Code. Select a line in your local changes, ask a question or request a change, and send it straight to Claude Code in your terminal. Replies return to the same inline thread.
+GitHub-style review conversations, directly in VS Code. Pick a line in your local changes, ask a question or request a change, and send it straight to Claude Code in your terminal. Replies return to the same thread.
 
 [Install the preview](INSTALL.md) · [Download a VSIX](https://github.com/kaiketsu-labs/pair-review/releases) · [Report an issue](https://github.com/kaiketsu-labs/pair-review/issues/new/choose)
 
 [![Watch the Pair Review demo](media/pair-review-poster.jpg)](media/pair-review-demo.mp4)
 
-**Demo:** staged interface with simulated Claude responses, showing the optional side composer. The default input is now native inline comments. It is not a recording of a verified live integration.
+**Demo:** staged interface of an earlier version with simulated Claude responses and native inline comments. Comments now live on the review page. It is not a recording of a verified live integration.
 
 ## A review that becomes a conversation
 
-Open a diff, leave feedback, and keep reviewing. Each submitted comment reaches your connected agent automatically—there is no separate review submission.
+Open the review page, leave feedback, and keep reviewing. Each submitted comment reaches your connected agent automatically; there is no separate review submission.
 
 | Action | What Claude is asked to do |
 | --- | --- |
-| **Ask `/a`** | Explain a decision or discuss the code. |
-| **Implement `/i`** | Make the requested change, then return it for your review. |
-| **Summarize `/r`** | Condense the conversation and its remaining decisions. |
+| **Ask Claude** | Explain a decision or discuss the code. |
+| **Implement** | Make the requested change, then return it for your review. |
 
-Native VS Code comments keep the conversation next to the code. Each Review list entry shows its filename, line and status. Status-only updates keep existing message controls in place. Claude can reply and report progress; **you decide when a thread is resolved**.
+The **Local** view in the Pair Review sidebar lists every file of the repository with Git's change marks and the number of open comments. **Review local changes** in its toolbar opens the review page. The **Changes** tab lists uncommitted changes and new files against HEAD. Any file you opened from the view or that has open threads gets its own tab, shown whole and marked **Not changed**. The tab's × closes it while the file has no comments.
 
-Use the **✓** on a thread or Review list entry to resolve it. Completed conversations disappear from the editor and list. The Review toolbar's **eye** shows them again; **Wieder öffnen** restores an active thread. Nothing is deleted.
+With several checkouts, such as the window's folders, nested repositories and their Git worktrees, the view lists each checkout under its repository's row. The filter button in the view's title bar narrows them by repository, branch, or PR number or title. Its **Review local changes** button opens that checkout's own page, with its own comments, Viewed marks and Claude connection. Rows of PR worktrees open the PR's review page instead; their files open there, whole when the PR does not change them.
 
-If unfocused conversations blend into your editor, choose the **half-filled circle · Kommentarfenster hervorheben** in the Review toolbar, or run that command from the Command Palette. Activate it once per project; installation alone does not change the colors. It adds a distinct thread surface, darker reply field and neutral border for the current theme. **Standarddarstellung wiederherstellen** restores the previous colors. VS Code shares these colors with other native comments and Peek results in the same project; high-contrast themes retain their native colors.
+When a checkout's branch has an open PR of yours, its page shows a **PR #N** chip beside the branch. The chip turns the tab into the PR's review page on that same checkout. Threads, Viewed marks and the connected Claude conversation carry over; Pair Review never moves the checkout, so pull GitHub's new commits yourself.
 
-For a narrower reading area, choose **Review → … → Zentrierte Ansicht**. This toggles VS Code's centered layout, narrowing the source and inline comments together; drag its side boundaries to adjust the width. Native comment width cannot be set separately. Side-by-side diffs and multiple editor groups may expand again with VS Code's default layout settings.
+Click a line number, or drag across several, to comment. The Threads card lists every thread with its file, line and status. Claude can reply and report progress; **you decide when a thread is resolved**. **Resolve** closes it and **Reopen** continues it. Nothing is deleted.
 
-Write directly beside the changed code: click the gutter **+**, enter `/a`, `/i`, or `/r` followed by your feedback, then use the single **Senden** action. The prefix determines the mode when sending. Bare `/r` or `/R` summarizes an existing thread without extra text. Existing threads have a native reply field, so the conversation stays attached to its code.
+**Viewed** on a file or on selected lines works as on PR pages. Marks lapse once the code changes. The page reads the files again when they change on disk.
 
-The gutter **+** focuses its input directly; drafts opened by an extension command may need a click into the input because VS Code's stable API cannot focus that field.
+**Speak on macOS:** click the comment field, then use your Mac's Microphone key or Dictation shortcut. Review the text and choose **Ask Claude** or **Implement**. [Dictation guide →](DICTATION.md)
 
-Prefer a separate input? **Pair Review: Feedback in Seitenansicht schreiben** opens a compact composer with live mode buttons, saved drafts and selection following. An empty draft follows new selections without moving focus; written drafts stay pinned and offer an explicit switch. Selected lines remain outlined when you click into the composer. Active text composition is preserved before slash switching, and bare `/r` on a new comment explains that it needs an existing conversation. Closing keeps drafts for **Pair Review: Entwurf fortsetzen**. Native inline draft recovery remains managed by VS Code.
-
-**Speak on macOS:** click the input, type `/a` or `/i`, then use your Mac's Microphone key or Dictation shortcut. Review the text and choose **Senden**. [Dictation guide →](DICTATION.md)
-
-Code blocks appear in darker rounded cards with a compact file/language header and VS Code's syntax colors; missing fence languages inherit the review file's language for display. Choose the small **editor icon** in the reply header beside the author or beside the composer's code preview (hover for its label) to use the real editor. Replies with several code blocks offer a compact picker. A confirmed unique match opens the current project file, where hover, Cmd/Ctrl-click and F12 work through your installed language support. Proposed or ambiguous code opens as a clearly labeled, read-only code preview with limited project navigation. The chat and draft stay in place. Inline Markdown blocks remain display-only. Clearly recognized, standalone JavaScript/TypeScript imports and exported functions receive display-only code boxes even in older replies. This includes attached JSDoc and an isolated documented function header; missing bodies are never invented. Ambiguous text remains prose.
-
-## Carry the conversation into your PR
-
-Use the **An GitHub-PR übergeben** action in the Review toolbar. Pair Review finds the current branch's open PR and prepares an editable preview of available summaries and unresolved questions. Select the content, inspect the exact PR and text, then explicitly publish it. Later handoffs update your managed review comment instead of adding a duplicate.
-
-Edited or failed handoffs can be resumed after closing the preview during the same VS Code session. **Entwurf fortsetzen** keeps the original snapshot; **Neue Momentaufnahme** prepares current content. This recovery ends when VS Code reloads. Editing published text clearly marks it as unpublished again.
-
-`/r` still summarizes a local conversation; it never publishes to GitHub. The first handoff uses a PR discussion comment with captured code locations, because local changes may not match the pushed PR's diff lines. Publishing uses your GitHub sign-in in VS Code. [PR handoff guide →](PR-HANDOFF.md)
+Claude's code appears in syntax-colored blocks. Cmd/Ctrl-click a name in the diff to peek at its definition, and **Open in editor** opens the file for hover, references and editing. Suggested changes in a reply offer **Apply**, which writes them to the file without committing.
 
 ## Start in a minute
 
 Download a `.vsix` from [GitHub Releases](https://github.com/kaiketsu-labs/pair-review/releases), then choose **Extensions → … → Install from VSIX…** in VS Code. The extension is not published on the Marketplace yet.
 
-Open a trusted local Git repository and run **Pair Review: Mit Claude verbinden**:
+Open a trusted local Git repository and click **Connect Claude** on the local review page:
 
 | Choice | Result |
 | --- | --- |
-| **Unterhaltung auswählen** | Search this project's recent conversation names and branches; running conversations are marked. Claude's own picker remains available as a fallback. |
-| **Neue Unterhaltung** | Start a fresh conversation with review feedback enabled. |
-| **Laufende Unterhaltung verbinden** | Keep the original Claude process and conversation; use the setup view's two copyable commands inside it. Requires Claude Code 2.1.280+. |
+| **New conversation** | Start a fresh conversation with review feedback enabled. |
+| **Resume a conversation…** | Search this project's recent conversation names and branches; running conversations are marked. **All conversations in Claude…** opens Claude's own picker. |
+| **Connect running Claude** | Keep the original Claude process and conversation; run the menu's two copyable commands inside it. Requires Claude Code 2.1.280+. |
+| **Copy command** | Copy a start command for a terminal outside VS Code. |
+
+The Command Palette's **Pair Review: Mit Claude verbinden** offers the same choices when no review page is open.
 
 To connect a running conversation, prepare it in VS Code, then run `/reload-plugins --force` and `/pair-review:connect` in the intended Claude conversation. Pair Review installs a project-local plugin and waits for that session's actual receiver before showing **Feedback aktiv**. The reload rereads conversation context once. This works in either terminal location; the current authenticated walkthrough covers the integrated terminal. For a new/resumed conversation in a separate app, use **Review → … → Verbindungsbefehl kopieren** at a shell prompt. Keep the project's VS Code window open. [Connection details](CLAUDE-SESSION-ATTACH.md).
 
-Open **Pair Review: Änderungen reviewen**, then click the gutter **+** or select code and press **⌘⌥M** on macOS / **Ctrl+Alt+M** on Linux. Write `/a Why this approach?` or `/i Make this change…` and choose **Senden**. Continue directly in the thread's reply field. The current interface uses German labels.
+Click **Review local changes** in the **Local** view, then click a line number. Write your feedback and choose **Ask Claude** or **Implement**. Continue with the thread's **Reply**. Some labels are still German.
 
 Requires **VS Code 1.100+**, **Node.js 22+**, **Git**, and an installed, authenticated **Claude Code with `asyncRewake` support**. macOS is the primary target; Linux is unverified. Automatic connection is currently unavailable on Windows. [Installation and troubleshooting →](INSTALL.md)
 
@@ -76,9 +66,9 @@ Hook messages identify the file, review mode and actual feedback. Ordinary tool 
 
 The status bar distinguishes **Review · Verbinden**, **Review · Zustellung pausiert**, and an active feedback receiver. Readiness is separate from Claude acknowledging a comment. After upgrading, reconnect Claude once so older helpers can report the new readiness signal. A window reload reuses this project's managed **Claude · Pair Review** terminal instead of creating a second session.
 
-Connection files and submitted threads live in VS Code's workspace storage. The extension passes configuration to the session it launches, without editing your repository's `.claude` files or `.mcp.json`. Claude's existing tool permissions still apply; `/a` and `/r` are instructions to avoid edits, not a separate permission sandbox.
+Connection files and submitted threads live in VS Code's workspace storage. The extension passes configuration to the session it launches, without editing your repository's `.claude` files or `.mcp.json`. Claude's existing tool permissions still apply; **Ask Claude** is an instruction to avoid edits, not a separate permission sandbox.
 
-The command, editor action and keyboard shortcut capture code when opening a draft; that context stays fixed if the file changes while you type. VS Code's own gutter **+** exposes a new draft only when it is sent, so that path captures code at send time. Existing replies retain their thread's context. If a location cannot be identified safely, the thread opens its saved excerpt. Renamed files appear as a deletion and an addition.
+A comment captures its code when you send it. Replies keep the thread's original context. A thread whose code is gone shows above its file's diff as a comment on lines the diff does not show.
 
 ## Your own instructions for Claude
 
@@ -101,7 +91,7 @@ Pair Review removes a PR's worktree when the PR is merged or closed, or when you
 
 ## Preview status
 
-This is an early preview. Native conversations have distinct avatars and compact status headings; the optional side composer shows one compact, syntax-colored code preview. Python, JavaScript/TypeScript, JSON and shell snippets use editor-like light/dark colors; unsupported or large snippets remain plain text. The editor icon opens native hover and reference navigation. VS Code controls native comment dimensions and typography. The project appearance action softens reply outlines using the shared contrast-border color, so other controls in that project's current theme can also receive the quieter border; high-contrast themes stay unchanged. Current checks and remaining authenticated integration work are recorded in the [review findings](REVIEW.md). The demo uses simulated responses.
+This is an early preview. Local review and PR review share one review page; its colors follow your VS Code theme. Current checks and remaining authenticated integration work are recorded in the [review findings](REVIEW.md). The demo uses simulated responses.
 
 The [native UX verification report](UX-REVIEW-2026-10-21.md) includes a real authenticated new/resumed Claude conversation: an inline question recalled earlier conversation context, `/R` summarized the thread, and human resolution hid it. Screenshots and a sanitized event trace distinguish these results from earlier simulated walkthroughs. Separate-terminal execution and busy-agent delivery remain unverified in this pass. [Earlier end-to-end checks](QA-2026-10-21.md).
 
@@ -109,7 +99,8 @@ The [daily-workflow audit](https://github.com/flucas96/local-review/issues/4) tr
 
 - One local workspace folder and one intended agent session.
 - The background watcher expires after 24 hours; reconnect or send Claude a prompt to rearm it.
-- Submitted comments persist. Optional side-composer drafts are saved in workspace storage and can be resumed explicitly; native draft recovery is managed by VS Code.
+- Submitted comments persist. Unsent comment text stays on the review page until it closes.
+- Local review needs the workspace folder to be a Git repository's top folder.
 - Delivery is at least once. Event IDs reduce duplicate responses; agent side effects cannot be guaranteed exactly once after a crash.
 
 ## Contribute
@@ -118,4 +109,4 @@ The [daily-workflow audit](https://github.com/flucas96/local-review/issues/4) tr
 
 The manual GitHub workflows can validate and package the extension or prepare a draft release. They require explicit approval to run checks and never publish to the Marketplace.
 
-Built on the [VS Code Comments API](https://code.visualstudio.com/api/references/vscode-api#CommentController), [Claude hooks](https://code.claude.com/docs/en/hooks), and [MCP](https://code.claude.com/docs/en/mcp).
+Built on [VS Code webviews](https://code.visualstudio.com/api/extension-guides/webview), [Claude hooks](https://code.claude.com/docs/en/hooks), and [MCP](https://code.claude.com/docs/en/mcp).

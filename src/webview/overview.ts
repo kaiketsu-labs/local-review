@@ -1,4 +1,5 @@
 import type { ClaudeStep } from '../claudeRunner.js';
+import type { ClaudeConversation } from '../claudeSessions.js';
 import type { DefinitionPeek } from '../definitions.js';
 import { buildGuide, groupReadMarks, stepViewed as isStepViewed, type GuideGroup, type GuideStep, type Severity } from '../prAnalysis.js';
 import type { DefinitionTarget, DiffRange, DiffSide, ExtensionMessage, FilePreview, GitHubMessageView, GitHubThreadView, OverviewState, PageMessage, PickedSuggestion, PickTarget } from '../pullRequestOverview.js';
@@ -8,6 +9,7 @@ import { fullyRead, rangeReadIds, readLines, type MarkedRange } from '../readLin
 import type { LineRange } from '../reviewedFiles.js';
 import type { DiffHunk, DiffLine, FileDiff } from '../unifiedDiff.js';
 import { codicons } from '../codicons.js';
+import type { FileIcon, FileIcons } from '../fileIcons.js';
 import { mediaType, type MediaPreview, type MediaSide } from '../media.js';
 import type * as PdfJs from 'pdfjs-dist';
 
@@ -37,6 +39,8 @@ interface Saved {
   readonly hiddenTypes?: readonly string[];
   readonly conversationDraft?: string;
   readonly conversationFolded?: boolean;
+  readonly fileTab?: string | undefined;
+  readonly tabOrder?: readonly string[];
 }
 type Thread = (OverviewState['threads'][number] & { readonly source: 'local'; readonly pending?: never; readonly outdated?: never })
   | (GitHubThreadView & { readonly source: 'github' });
@@ -58,6 +62,15 @@ const saved = (api.getState() ?? {}) as Saved;
 const nonce = document.currentScript?.nonce ?? '';
 let layout: Layout = saved.layout === 'split' ? 'split' : 'unified';
 let view: View = saved.view === 'guide' || (saved.view === undefined && saved.layout === 'guided') ? 'guide' : 'files';
+/** The page's open file tab, a file outside the changes shown alone; undefined shows the Changes tab. */
+let fileTab = saved.fileTab;
+/** The file tab last scrolled into view, so redraws keep the tab row where the user scrolled it. */
+let scrolledTab: string | undefined;
+/** Paths of file tabs in the order they opened, so a new tab goes last instead of by name. */
+const tabOrder: string[] = [...saved.tabOrder ?? []];
+let fileIcons: FileIcons | undefined;
+/** CSS font families of the icon theme's fonts already added to the page, by font id. */
+const iconFonts = new Map<string, string>();
 let peekWidth = saved.peekWidth;
 let folders = saved.folders === true;
 const collapsed = new Map(Object.entries(saved.collapsed ?? {}));
@@ -146,7 +159,7 @@ const labels: Record<ReviewerState | CheckState, readonly [string, string, strin
 const methodLabels: Record<MergeMethod, string> = { squash: 'Squash and merge', merge: 'Create a merge commit', rebase: 'Rebase and merge' };
 const hideReasons: readonly (readonly [HideReason, string])[] = [['OUTDATED', 'Outdated'], ['RESOLVED', 'Resolved'], ['DUPLICATE', 'Duplicate'], ['OFF_TOPIC', 'Off-topic'],
   ['LOW_QUALITY', 'Low quality'], ['SPAM', 'Spam'], ['ABUSE', 'Abuse']];
-const changeLetters: Record<FileDiff['change'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' };
+const changeLetters: Record<FileDiff['change'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', unchanged: '' };
 const severityLabels: Record<Severity | 'unclassified', string> = { critical: 'Critical', significant: 'Significant', routine: 'Routine', trivial: 'Trivial', unclassified: 'Unclassified' };
 let guide: GuideGroup[] | undefined;
 let guideStamp = '';
@@ -239,7 +252,8 @@ function frameMain(): void {
 
 function save(): void {
   api.setState({ layout, view, peekWidth, folders, collapsed: Object.fromEntries(collapsed), previewing: [...previewing], composer, replies: Object.fromEntries(replies), publishing: Object.fromEntries(publishing),
-    range: wantedRange ?? diffRange, whitespace, filter: fileFilter, hideViewed, hiddenTypes: [...hiddenTypes], conversationDraft, conversationFolded });
+    range: wantedRange ?? diffRange, whitespace, filter: fileFilter, hideViewed, hiddenTypes: [...hiddenTypes], conversationDraft, conversationFolded, fileTab,
+    tabOrder });
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -285,6 +299,14 @@ function icon(svg: string): Element {
   const template = document.createElement('template');
   template.innerHTML = svg;
   return template.content.firstElementChild as Element;
+}
+
+/** Your open PR from the local page's branch; clicking turns this tab into its review page. */
+function pullRequestChip({ number, title }: NonNullable<OverviewState['branchPullRequest']>): HTMLButtonElement {
+  const chip = button('', () => post({ action: 'open-pr' }), 'small pr-chip');
+  chip.append(icon(codicons.gitPullRequest), 'PR #' + number);
+  chip.dataset.tip = 'Review #' + number + ' ' + title + ' in this tab';
+  return chip;
 }
 
 /** A branch name that copies itself, like GitHub's. */
@@ -505,7 +527,8 @@ function renderState(details: PullRequestDetails): void {
   $('mergeable').textContent = draft ? 'Mark it ready for review before merging.'
     : !details.open ? (details.merged ? '' : 'Closed without merging.')
     : details.mergeable === 'no' ? 'Has conflicts with the base branch.' : details.mergeable === 'unknown' ? 'GitHub is still checking for conflicts.' : '';
-  const conflicted = details.open && details.mergeable === 'no' && details.canEdit;
+  // On your own checkout, Claude fixes conflicts in the conversation you connected, so the page has no Fix conflicts button.
+  const conflicted = details.open && details.mergeable === 'no' && details.canEdit && current?.claude.link === undefined;
   const question = conflicted && current?.claude.running !== true ? current?.conflictQuestion : undefined;
   $('conflict-row').hidden = !conflicted || question !== undefined;
   $('conflict-ask').hidden = question === undefined;
@@ -1530,6 +1553,95 @@ function dismissForm(form: { readonly login: string; text: string }): HTMLElemen
   return item;
 }
 
+/** Which part of the Claude menu shows: the choices, conversations to resume, or the steps that connect a running Claude. */
+let connectView: 'choices' | 'resume' | 'preparing' | 'running' = 'choices';
+let conversations: readonly ClaudeConversation[] | string | undefined;
+
+/** The Claude button where you connect a conversation yourself; the terminal button is for a PR's own Claude. */
+function renderConnectButton(link: OverviewState['claude']['link']): void {
+  const connect = $('connect');
+  $('terminal').hidden = link !== undefined;
+  $('remove-worktree').closest('.menu-anchor')?.toggleAttribute('hidden', link !== undefined);
+  connect.parentElement?.toggleAttribute('hidden', link === undefined);
+  if (link === undefined) return;
+  const label = link.terminal ? 'Open in terminal' : link.delivering ? 'Switch conversation' : 'Connect Claude';
+  if (connect.dataset.label !== label) {
+    connect.dataset.label = label;
+    connect.replaceChildren(el('span', 'range-text', label), icon(codicons.chevronDown));
+  }
+  if (connectView === 'running' && link.delivering) {
+    connectView = 'choices';
+    if (toolbarMenu?.anchor === 'connect') closeToolbarMenu();
+    showNotice({ text: 'Claude connected.' });
+  } else if (connectView === 'choices') renderConnectMenu();
+}
+
+function openConnectMenu(): void {
+  connectView = 'choices';
+  openToolbarMenu('connect', [], 'connect-menu');
+  renderConnectMenu();
+  toolbarMenu?.node.querySelector<HTMLElement>('input')?.focus();
+}
+
+function renderConnectMenu(): void {
+  const list = toolbarMenu?.anchor === 'connect' ? toolbarMenu.node.querySelector('.picker-list') : null;
+  if (!list) return;
+  const link = current?.claude.link;
+  const choose = (how: 'show' | 'new' | 'copy' | 'resume', session?: string): void => {
+    closeToolbarMenu();
+    post(session === undefined ? { action: 'connect-claude', how } : { action: 'connect-claude', how: 'resume', session });
+  };
+  const choice = (label: string, note: string, pick: () => void): HTMLElement => menuRow([el('span', 'label', label), ...note ? [el('span', 'muted', note)] : []], false, (on) => { if (on) pick(); }, true);
+  if (connectView === 'choices') {
+    const switching = link?.terminal === true || link?.delivering === true;
+    list.replaceChildren(
+      ...link?.terminal ? [choice('Show terminal', '', () => choose('show')), el('div', 'muted picker-note', 'Switch conversation')] : [],
+      choice('New conversation', '', () => choose('new')),
+      choice('Resume a conversation…', '', () => {
+        connectView = 'resume';
+        conversations = undefined;
+        renderConnectMenu();
+        list.querySelector('input')?.focus();
+        post({ action: 'claude-conversations' });
+      }),
+      choice('Connect running Claude', '', () => {
+        connectView = 'preparing';
+        renderConnectMenu();
+        post({ action: 'connect-claude', how: 'running' });
+      }),
+      choice('Copy command', switching ? 'new conversation' : 'for another terminal', () => choose('copy')),
+    );
+  } else if (connectView === 'resume') {
+    let search = list.querySelector<HTMLInputElement>('input[type=text]');
+    if (!search) {
+      search = el('input');
+      search.type = 'text';
+      search.placeholder = 'Filter conversations';
+      search.setAttribute('aria-label', 'Filter conversations');
+      search.addEventListener('input', () => renderConnectMenu());
+    }
+    const query = search.value.trim().toLowerCase();
+    const found = typeof conversations === 'string' || conversations === undefined ? [] : conversations
+      .filter((conversation) => !query || (conversation.title + ' ' + conversation.branch).toLowerCase().includes(query));
+    const rows = found.map((conversation) => choice(conversation.title,
+      [conversation.running ? 'Running' : '', relativeTime(new Date(conversation.modifiedAt).toISOString()), conversation.branch].filter(Boolean).join(' · '),
+      () => choose('resume', conversation.id)));
+    const note = typeof conversations === 'string' ? 'Could not list conversations: ' + conversations : conversations === undefined ? 'Loading…' : found.length ? '' : query ? 'No matches.' : 'No conversations in this folder yet.';
+    list.replaceChildren(search, ...rows, ...note ? [el('div', 'muted picker-note', note)] : [], choice('All conversations in Claude…', '', () => choose('resume')));
+  } else if (connectView === 'preparing') {
+    list.replaceChildren(el('div', 'muted picker-note', 'Preparing Claude…'));
+  } else {
+    const command = (text: string, which: 'reload' | 'connect'): HTMLElement => {
+      const row = el('div', 'row connect-command');
+      const copy = button('Copy', () => { post({ action: 'copy-connect', command: which }); copy.textContent = 'Copied'; }, 'small');
+      row.append(el('code', 'gap', text), copy);
+      return row;
+    };
+    list.replaceChildren(el('p', 'ask-text', 'In the Claude terminal, run:'), command('/reload-plugins --force', 'reload'), command('/pair-review:connect', 'connect'),
+      el('div', 'muted picker-note', 'Waiting for connection…'));
+  }
+}
+
 /** The base branch menu: a filter over the branches the PR could merge into; GitHub's list arrives after it opens. */
 function openBaseMenu(): void {
   if (busy) return;
@@ -1565,11 +1677,12 @@ function render(state: OverviewState): void {
   $('number').replaceChildren(...state.number === undefined ? [] : [copyRef('#' + state.number, state.url, 'link to the pull request')]);
   $('title').textContent = state.heading ?? state.title;
   const canChangeBase = state.details?.canEdit === true && state.details.open;
-  const byline = JSON.stringify([state.author, state.headBranch, state.baseBranch, canChangeBase]);
+  const byline = JSON.stringify([state.author, state.headBranch, state.baseBranch, canChangeBase, state.branchPullRequest]);
   if ($('byline').dataset.stamp !== byline) {
     $('byline').dataset.stamp = byline;
     if (toolbarMenu?.anchor === 'change-base') closeToolbarMenu();
-    $('byline').replaceChildren(state.author + ' wants to merge', branchRef(state.headBranch), 'into', branchRef(state.baseBranch), ...canChangeBase ? [baseButton()] : []);
+    if (state.local) $('byline').replaceChildren('Uncommitted changes on', branchRef(state.headBranch), ...state.branchPullRequest ? [pullRequestChip(state.branchPullRequest)] : []);
+    else $('byline').replaceChildren(state.author + ' wants to merge', branchRef(state.headBranch), 'into', branchRef(state.baseBranch), ...canChangeBase ? [baseButton()] : []);
   }
   $('facts').replaceChildren(...pullRequestFacts(state));
   const { details } = state;
@@ -1654,6 +1767,7 @@ function render(state: OverviewState): void {
   terminal.className = state.claude.running ? 'small' : 'quiet';
   terminal.textContent = state.claude.running ? 'Stop and open in terminal' : 'Open in terminal';
   terminal.dataset.tip = state.claude.running ? 'Stops Claude\'s background run, then continues its conversation in a terminal' : 'Continue this PR\'s Claude conversation in a terminal';
+  renderConnectButton(state.claude.link);
   const unpushed = state.unpushed?.length ?? 0;
   const push = $('push');
   push.hidden = !unpushed || !details?.canEdit;
@@ -1791,10 +1905,11 @@ function textarea(key: string, value: string, placeholder: string, onInput: (val
 }
 
 function composerBox(draft: Composer): HTMLElement {
-  const github = draft.target === 'github';
+  const github = draft.target === 'github' && !current?.local;
   const box = el('div', 'thread draft' + (github ? ' github' : ''));
   const head = el('div', 'strip');
   const toggle = el('span', 'seg');
+  toggle.hidden = current?.local === true;
   toggle.setAttribute('role', 'group');
   toggle.setAttribute('aria-label', 'Who sees this comment');
   for (const [value, label] of [['claude', 'Local'], ['github', 'On GitHub']] as const) {
@@ -2095,9 +2210,9 @@ function threadBox(thread: Thread): HTMLElement {
     box.append(publishBox(thread, draft));
     return box;
   }
-  actions.append(el('span', 'gap'), thread.url
+  actions.append(el('span', 'gap'), ...current?.local ? [] : [thread.url
     ? button('Open on GitHub ↗', () => post({ action: 'github', id: thread.id }), 'quiet')
-    : thread.source === 'local' ? toGitHubButton(thread) : button('Publish to GitHub…', () => post({ action: 'publish', id: thread.id }), 'quiet'));
+    : thread.source === 'local' ? toGitHubButton(thread) : button('Publish to GitHub…', () => post({ action: 'publish', id: thread.id }), 'quiet')]);
   actions.append(button(thread.resolved ? 'Reopen' : 'Resolve', () => post({ action: github ? 'github-resolve' : 'resolve', id: thread.id, resolved: !thread.resolved })));
   if (!thread.resolved) actions.append(button('Reply', () => { replies.set(thread.id, ''); focusNext = key; save(); renderFiles([thread.path]); }));
   box.append(actions);
@@ -2252,13 +2367,14 @@ function suggestionCard(thread: Extract<Thread, { source: 'local' }>, index: num
   publish.title = 'Adds it to your pending review as a GitHub suggestion the author can commit.';
   const canPush = current?.details?.canEdit === true;
   const apply = button(canPush ? 'Commit suggestion' : 'Apply', () => post({ action: 'apply-suggestion', ...where }), 'primary');
-  apply.title = !canPush ? 'Changes the file in the PR worktree. Nothing is committed, since you cannot push to this PR.'
+  apply.title = current?.local ? 'Changes the file. Nothing is committed.' : !canPush ? 'Changes the file in the PR worktree. Nothing is committed, since you cannot push to this PR.'
     : current?.unpushed?.length ? 'Commits the change after the unpushed commits. Push them together.' : 'Commits the change to the PR branch and pushes it.';
+  publish.hidden = current?.local === true;
   const done = thread.applied?.message === index ? thread.applied : undefined;
   if (done === undefined) actions.append(el('span', 'gap'), publish, apply);
   else if (done.done === 'pushed') actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + ' committed and pushed.'));
   else if (done.done === 'committed') actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + ' committed, not pushed yet.'));
-  else actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + ' applied to the worktree, not committed.'), button('Discard', () => post({ action: 'discard-suggestion', id: thread.id })), publish);
+  else actions.append(el('span', 'muted gap', 'Option ' + (done.option + 1) + (current?.local ? ' applied, not committed.' : ' applied to the worktree, not committed.')), button('Discard', () => post({ action: 'discard-suggestion', id: thread.id })), publish);
   card.append(head, lines, actions);
   return card;
 }
@@ -2294,6 +2410,7 @@ function jump(thread: Thread): void {
     return;
   }
   if (view === 'guide' && !document.getElementById('thread-' + thread.id)) { setView('files'); }
+  if (tabOf(thread.path) !== fileTab) { fileTab = tabOf(thread.path); save(); renderFiles(); }
   if (collapsed.get(thread.path) || folderOf(thread.path).some((folder) => collapsed.get('folder:' + folder))) {
     collapsed.set(thread.path, false);
     openFolders(thread.path);
@@ -2627,7 +2744,10 @@ function selectedReadIds(file: FileDiff, selection: LineRange): string[] | undef
 function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, draft: Composer | null | undefined = composer?.path === file.path ? composer : undefined, expandKey = file.path): HTMLTableElement {
   const node = el('table');
   const columns = el('colgroup');
-  const widths = layout === 'split' ? ['num', '', 'num', ''] : ['num', 'num', ''];
+  // An unchanged file has the same lines on both sides, so it shows them once with one line number.
+  const single = file.change === 'unchanged';
+  const split = layout === 'split' && !single;
+  const widths = split ? ['num', '', 'num', ''] : single ? ['num', ''] : ['num', 'num', ''];
   for (const name of widths) columns.append(el('col', name));
   node.append(columns);
   const notes = annotationsOf(file.path);
@@ -2637,7 +2757,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     for (const [side, line] of covers) {
       if (line === undefined) continue;
       if (draft?.side === side && draft.start <= line && line <= draft.end) {
-        const cells = [...row.children].slice(layout === 'split' && side === 'new' ? 2 : 0, layout === 'split' && side === 'old' ? 2 : undefined);
+        const cells = [...row.children].slice(split && side === 'new' ? 2 : 0, split && side === 'old' ? 2 : undefined);
         for (const cell of cells) cell.classList.add('sel');
         cells[0]?.classList.add('sel-start');
       }
@@ -2660,7 +2780,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
   };
   const lineRow = (line: DiffLine, hidden = false): void => {
     const row = el('tr', line.kind);
-    row.append(num(line.oldLine, file.path, 'old'), num(line.newLine, file.path, 'new'), code(line, ''));
+    row.append(...single ? [] : [num(line.oldLine, file.path, 'old')], num(line.newLine, file.path, 'new'), code(line, ''));
     add(row, [['old', line.oldLine], ['new', line.newLine]], hidden);
   };
   const pairRow = (left: DiffLine | undefined, right: DiffLine | undefined, hidden = false): void => {
@@ -2676,7 +2796,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     const html = contextLines.get(file.path)?.[newLine - 1];
     if (html === undefined) return;
     const line: DiffLine = { kind: 'context', oldLine: newLine + offset, newLine, html };
-    if (layout === 'split') pairRow(line, line);
+    if (split) pairRow(line, line);
     else lineRow(line);
   };
   const gaps = gapsOf(file);
@@ -2739,21 +2859,22 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     for (let line = gap.to - bottom + 1; line <= gap.to; line++) contextRow(line, gap.offset);
   };
   const draw = (row: Row, hidden: boolean): void => {
-    if (layout === 'split') pairRow(row[0], row[1], hidden);
+    if (split) pairRow(row[0], row[1], hidden);
     else if (row[0]) lineRow(row[0], hidden);
   };
   const isRead = (row: Row): boolean => row.every((line) => !line || read.has(line));
   file.hunks.forEach((hunk, index) => {
     const gap = gaps[index];
-    if (gap) gapRows(gap, index, hunk.header);
-    else {
+    // An unchanged file is one hunk of every line, so it has no header or gaps to show.
+    if (file.change !== 'unchanged' && gap) gapRows(gap, index, hunk.header);
+    else if (file.change !== 'unchanged') {
       const header = el('tr', 'hunk');
       const cell = el('td', '', hunk.header);
       cell.colSpan = widths.length;
       header.append(cell);
       node.append(header);
     }
-    const rows: Row[] = layout === 'split' ? pairs(hunk) : hunk.lines.map((line) => [line]);
+    const rows: Row[] = split ? pairs(hunk) : hunk.lines.map((line) => [line]);
     for (let at = 0; at < rows.length;) {
       const row = rows[at];
       if (row && !isRead(row)) { draw(row, false); at += 1; continue; }
@@ -2769,7 +2890,7 @@ function table(file: FileDiff, threads: readonly Thread[], placed: Set<string>, 
     }
   });
   const last = gaps[file.hunks.length];
-  if (last && file.change !== 'added' && file.change !== 'deleted') gapRows(last, file.hunks.length);
+  if (last && file.change !== 'added' && file.change !== 'deleted' && file.change !== 'unchanged') gapRows(last, file.hunks.length);
   return node;
 }
 
@@ -2787,7 +2908,7 @@ function setTip(button: HTMLElement, tip: string): void {
 /** Redraw the file list; given paths, or 'state' for files whose state changed, redraw only those boxes when the rest are on the page. */
 function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
   for (const name of ['unified', 'split'] as const) $(name).setAttribute('aria-pressed', String(layout === name));
-  for (const name of ['files', 'guide'] as const) $('view-' + name).setAttribute('aria-selected', String(view === name));
+  for (const name of ['files', 'guide'] as const) $('view-' + name).setAttribute('aria-selected', String(view === name && fileTab === undefined));
   showGuideTab();
   renderRangeControls();
   const folderButton = $('folders');
@@ -2797,8 +2918,11 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
   folderButton.setAttribute('aria-pressed', String(folders));
   if (!files) return;
   if (view === 'guide') { keepView(() => renderGuide(only)); return; }
-  const allFiles = files;
-  const shownFiles = filteredFiles(allFiles);
+  renderFileTabs();
+  const tabs = tabFiles();
+  const tabbed = tabs.find((file) => file.path === fileTab);
+  const allFiles = tabbed ? [tabbed] : files.filter((file) => !tabs.includes(file));
+  const shownFiles = tabbed ? allFiles : filteredFiles(allFiles);
   const container = $('files');
   const threadsByFile = new Map<string, Thread[]>();
   for (const thread of allThreads()) {
@@ -2826,7 +2950,7 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
     } else {
       container.replaceChildren();
       fileKeys.clear();
-      if (!shownFiles.length) container.append(el('p', 'muted', allFiles.length ? 'No files match the filter.' : diffRange.kind === 'all' ? 'No changes against the base branch.' : 'No changes in ' + rangeLabel(diffRange) + '.'));
+      if (!shownFiles.length) container.append(el('p', 'muted', allFiles.length ? 'No files match the filter.' : current?.local ? 'No uncommitted changes. Pick a file in the Local view to review it.' : diffRange.kind === 'all' ? 'No changes against the base branch.' : 'No changes in ' + rangeLabel(diffRange) + '.'));
       const append = (parent: HTMLElement, folder: FileFolder<FileDiff>, depth: number): void => {
         for (const child of folder.folders) {
           const isCollapsed = collapsed.get('folder:' + child.path) === true;
@@ -2846,6 +2970,77 @@ function renderFiles(only?: readonly (string | undefined)[] | 'state'): void {
     if (folders) updateFolderProgress(tree);
     for (const frame of container.querySelectorAll<HTMLIFrameElement>('iframe.html-preview')) layoutMargin(frame, frameTops.get(frame.dataset.path ?? '') ?? {});
   });
+}
+
+/** Files outside the changes that the page shows in their own tabs, in the order they were opened. */
+function tabFiles(): readonly FileDiff[] {
+  if (!files) return [];
+  const opened = files.filter((file) => file.change === 'unchanged');
+  // A closed tab leaves the order, so opening it again puts it last.
+  tabOrder.splice(0, tabOrder.length, ...tabOrder.filter((path) => opened.some((file) => file.path === path)));
+  for (const file of opened) if (!tabOrder.includes(file.path)) tabOrder.push(file.path);
+  return [...opened].sort((a, b) => tabOrder.indexOf(a.path) - tabOrder.indexOf(b.path));
+}
+
+/** The tab that shows `path`: its own when it is an opened unchanged file, else Changes. */
+function tabOf(path: string): string | undefined {
+  return tabFiles().some((file) => file.path === path) ? path : undefined;
+}
+
+/** One tab per opened unchanged file after Changes, closable while the file has no comments. */
+function renderFileTabs(): void {
+  const tabs = tabFiles();
+  if (fileTab !== undefined && !tabs.some((file) => file.path === fileTab)) fileTab = undefined;
+  $('view-files').setAttribute('aria-selected', String(view === 'files' && fileTab === undefined));
+  for (const id of ['whitespace', 'filter-box', 'filter-menu']) $(id).classList.toggle('off-view', fileTab !== undefined);
+  const list = $('file-tabs');
+  const left = list.scrollLeft;
+  for (const old of list.querySelectorAll('.file-tab')) old.remove();
+  for (const file of tabs) {
+    const name = file.path.split('/').pop() ?? file.path;
+    const tab = button(name, () => { fileTab = file.path; save(); renderFiles(); });
+    const icon = fileIcons?.byPath[file.path];
+    if (icon) tab.prepend(iconNode(icon));
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(fileTab === file.path));
+    tab.title = file.path;
+    const wrap = el('span', 'file-tab');
+    wrap.append(tab);
+    if (!allThreads().some((thread) => thread.path === file.path)) {
+      const close = button('', () => post({ action: 'close-file', path: file.path }), 'icon-button tab-close');
+      close.innerHTML = codicons.close;
+      setTip(close, 'Close ' + name);
+      wrap.append(close);
+    }
+    list.append(wrap);
+  }
+  list.scrollLeft = left;
+  if (scrolledTab !== fileTab) {
+    scrolledTab = fileTab;
+    list.querySelector('[aria-selected=true]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+}
+
+/** A theme file icon: a glyph of an icon font, added to the page on first use, or an image. */
+function iconNode(icon: FileIcon): HTMLElement {
+  if ('image' in icon) {
+    const image = el('img', 'file-icon');
+    image.src = icon.image;
+    image.alt = '';
+    return image;
+  }
+  let family = iconFonts.get(icon.font);
+  const data = fileIcons?.fonts[icon.font];
+  if (family === undefined && data !== undefined) {
+    family = 'file-icons-' + iconFonts.size;
+    iconFonts.set(icon.font, family);
+    document.head.append(el('style', '', '@font-face{font-family:"' + family + '";src:url("' + data + '")}'));
+  }
+  const glyph = el('span', 'file-icon', icon.char);
+  glyph.setAttribute('aria-hidden', 'true');
+  if (family) glyph.style.fontFamily = '"' + family + '"';
+  if (icon.color) glyph.style.color = icon.color;
+  return glyph;
 }
 
 /** Folders a path sits in, outermost first: every prefix, so compacted folder rows match too. */
@@ -3012,7 +3207,7 @@ function renderThreadList(): void {
   $('threads-title').textContent = 'Threads (' + threads.length + ')';
   const list = $('threads');
   list.replaceChildren();
-  if (threads.length === 0) list.append(el('li', 'muted', current?.github || current?.githubError ? 'No comments yet.' : 'No local comments yet. Loading GitHub comments…'));
+  if (threads.length === 0) list.append(el('li', 'muted', current?.local || current?.github || current?.githubError ? 'No comments yet.' : 'No local comments yet. Loading GitHub comments…'));
   if (current?.githubError) list.append(el('li', 'bad', 'Could not load GitHub comments: ' + current.githubError));
   for (const kind of threadKinds) {
     const members = threads.filter((thread) => threadKind(thread) === kind && standalone(thread));
@@ -3294,7 +3489,13 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   const badge = el('span', 'badge ' + file.change, changeLetters[file.change]);
   badge.title = file.change;
   const stats = el('span', 'stats');
-  stats.append(el('span', 'stat-add', '+' + file.additions), ' ', el('span', 'stat-del', '−' + file.deletions));
+  if (file.saved) {
+    const chip = el('span', 'file-chip', 'Saved code');
+    chip.title = 'This file no longer exists. Showing the code saved with its comments.';
+    stats.append(chip);
+  }
+  else if (file.change === 'unchanged') stats.append(el('span', 'file-chip', 'Not changed'));
+  else stats.append(el('span', 'stat-add', '+' + file.additions), ' ', el('span', 'stat-del', '−' + file.deletions));
   const label = el('label', 'viewed');
   const check = el('input');
   check.type = 'checkbox';
@@ -3306,6 +3507,7 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   });
   label.append(check, 'Viewed');
   const open = button('Open in editor', () => post({ action: 'editor', path: file.path }));
+  open.hidden = file.saved === true;
   const whole = fullFile(file);
   const full = button(whole ? 'Diff only' : 'Full file', () => {
     expanded.set(file.path, whole ? new Map() : new Map(Array.from({ length: file.hunks.length + 1 }, (_, index) => [index, { top: Infinity, bottom: 0 }])));
@@ -3314,7 +3516,7 @@ function fileBox(file: FileDiff, threads: readonly Thread[]): HTMLElement {
   });
   const kind = previewKind(file);
   const showPreview = kind !== undefined && (previewing.has(file.path) || previewOnly(file));
-  full.hidden = showPreview || file.binary || file.change === 'added' || file.change === 'deleted' || !file.hunks.length || !atHead;
+  full.hidden = showPreview || file.binary || file.change === 'added' || file.change === 'deleted' || file.change === 'unchanged' || !file.hunks.length || !atHead;
   const mode = previewSwitch(file, showPreview);
   const unresolved = threads.filter((thread) => !thread.resolved).length;
   const comments = el('span', 'muted comments', !threads.length ? '' : threads.length + (threads.length === 1 ? ' comment' : ' comments') + (unresolved === threads.length ? '' : ', ' + unresolved + ' open'));
@@ -3472,7 +3674,7 @@ function showGuideTab(): void {
   count.className = analysis?.running ? 'count working' : 'count';
   count.textContent = analysis?.running || steps === undefined ? '' : String(steps);
   count.hidden = !analysis?.running && steps === undefined;
-  $('files-count').textContent = files ? String(files.length) : '';
+  $('files-count').textContent = files ? String(files.length - tabFiles().length) : '';
   for (const id of ['analyze', 'analysis-status', 'analyze-divider']) $(id).classList.toggle('off-view', view !== 'guide');
   for (const id of ['range', 'whitespace', 'filter-box', 'filter-menu']) $(id).classList.toggle('off-view', view !== 'files');
 }
@@ -3588,6 +3790,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
   for (const log of live) void hopIntoAvatar(log);
   const shownAs = JSON.stringify([diffRange, whitespace, atHead]);
   if (data.selection) { diffRange = data.selection.range; whitespace = data.selection.whitespace; atHead = data.atHead !== false; save(); }
+  if (data.icons) fileIcons = data.icons;
   if (data.files) {
     const changed = changedFiles(data.files, shownAs);
     files = data.files;
@@ -3618,6 +3821,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
   if (data.revealStep) revealStep(data.revealStep);
   if (data.revealGroup) revealGroup(data.revealGroup);
   if (data.reveal && files) {
+    fileTab = tabOf(data.reveal);
     collapsed.set(data.reveal, false);
     openFolders(data.reveal);
     save();
@@ -3675,6 +3879,9 @@ function onExtensionMessage(data: ExtensionMessage): void {
     renderFiles([allThreads().find((thread) => thread.id === id)?.path]);
   }
   if (data.branches) { baseBranches = data.branches; renderBaseMenu(); }
+  if (data.conversations || data.conversationsError !== undefined) { conversations = data.conversations ?? data.conversationsError; renderConnectMenu(); }
+  if (data.runningReady && connectView === 'preparing') { connectView = 'running'; renderConnectMenu(); }
+  if (data.error !== undefined && connectView === 'preparing' && toolbarMenu?.anchor === 'connect') closeToolbarMenu();
   if (data.branchesError !== undefined) { baseBranches = data.branchesError; renderBaseMenu(); }
   if (data.pickerOptions) { pickerOptions = data.pickerOptions; pickerError = undefined; renderPicker(); }
   if (data.pickerError !== undefined) { pickerError = data.pickerError; renderPicker(); }
@@ -3683,6 +3890,7 @@ function onExtensionMessage(data: ExtensionMessage): void {
 
 $('show-unpushed').addEventListener('click', showUnpushed);
 for (const [id, action] of [['pr', 'pr'], ['push', 'push'], ['terminal', 'terminal'], ['retry', 'retry'], ['refresh', 'refresh']] as const) $(id).addEventListener('click', () => post({ action }));
+$('connect').addEventListener('click', openConnectMenu);
 $('remove-worktree').addEventListener('click', () => askInMenu('remove-worktree',
   'Remove the worktree for ' + (current?.number === undefined ? 'this PR' : '#' + current.number) + '? Its local comments are deleted too. Git refuses if it has uncommitted changes.',
   'Remove worktree', () => post({ action: 'remove-worktree' })));
@@ -3758,7 +3966,7 @@ $('peek-open').addEventListener('click', () => {
 });
 $('unified').addEventListener('click', () => { layout = 'unified'; save(); renderFiles(); });
 $('split').addEventListener('click', () => { layout = 'split'; save(); renderFiles(); });
-for (const name of ['files', 'guide'] as const) $('view-' + name).addEventListener('click', () => { setView(name); });
+for (const name of ['files', 'guide'] as const) $('view-' + name).addEventListener('click', () => { fileTab = undefined; setView(name); });
 $('range').addEventListener('click', openRangeMenu);
 $('whitespace').addEventListener('click', () => requestFiles(diffRange, !whitespace));
 $<HTMLInputElement>('file-filter').value = fileFilter;

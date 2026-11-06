@@ -6,7 +6,6 @@ import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
-import { listChangedFiles } from '../src/git.js';
 import { mockPullRequestProvider } from '../src/mockPullRequests.js';
 import type { PullRequestProvider, PullRequestSummary } from '../src/pullRequests.js';
 import { ensureWorktree, hasWorktree, migrateWorktrees, readPullRequestBase, readWorktree, removeWorktree, repositoryStorage, reviewDataPath, worktreePath } from '../src/worktrees.js';
@@ -96,10 +95,7 @@ test('creates a PR worktree once, reviews it against the merge base and removes 
   const metadata = await readWorktree(storage, folder);
   assert.equal(metadata?.role, 'reviewer');
   assert.equal(metadata?.pullRequest.number, 5);
-  const base = await readPullRequestBase(folder, 'main');
-  assert.ok(base !== undefined);
-  assert.deepEqual(await listChangedFiles(folder, base), ['feature.ts']);
-  assert.deepEqual(await listChangedFiles(folder), []);
+  assert.ok(await readPullRequestBase(folder, 'main') !== undefined);
 
   await removeWorktree(source, storage, 'acme/app', 5);
   assert.equal(await hasWorktree(storage, 'acme/app', 5), false);

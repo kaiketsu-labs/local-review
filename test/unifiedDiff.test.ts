@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { parseUnifiedDiff, readPullRequestDiff, splitHighlightedLines } from '../src/unifiedDiff.js';
+import { parseUnifiedDiff, readPullRequestDiff, savedCodeDiff, splitHighlightedLines } from '../src/unifiedDiff.js';
 
 const output = [
   'diff --git a/src/a.ts b/src/a.ts',
@@ -90,4 +90,19 @@ test('reads both versions of a PR file to color hunks from the whole file', asyn
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test('a deleted file shows the code saved with its comments at their original lines, keeping the first of overlapping excerpts', () => {
+  const anchor = (startLine: number, contextBefore: string, selectedText: string, contextAfter: string) => ({
+    path: 'gone.ts', startLine, endLine: startLine, selectedText, contextBefore, contextAfter, documentHash: 'x', side: 'working' as const, baseRevision: 'a'.repeat(40),
+  });
+  const file = savedCodeDiff('gone.ts', [
+    anchor(20, 'const c = 3;\n', 'const d = 4;', 'const e = 5;'),
+    anchor(10, 'const a = 1;\n', 'const b = 2;', ''),
+    anchor(10, '', 'const b = 2;', ''),
+  ]);
+  assert.equal(file.change, 'unchanged');
+  assert.equal(file.saved, true);
+  assert.deepEqual(file.hunks.map((hunk) => hunk.lines.map((line) => [line.oldLine, line.newLine])), [[[9, 9], [10, 10]], [[19, 19], [20, 20], [21, 21]]]);
+  assert.match(file.hunks[1]?.lines[1]?.html ?? '', /d/u);
 });
